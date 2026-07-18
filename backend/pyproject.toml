@@ -1,0 +1,33 @@
+[project]
+name = "saregamapic-backend"
+version = "0.1.0"
+description = "SaReGaMaPic API — songs, scans, transcriptions (STF)"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.116",
+    "uvicorn[standard]>=0.35",
+    "python-multipart>=0.0.20",
+]
+
+# This machine's network needs the OS trust store for TLS (uv's bundled CA
+# bundle fails with UnknownIssuer). Applies to every uv command in this project.
+[tool.uv]
+system-certs = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "httpx>=0.28",
+    "ruff>=0.12",
+]
+
+[tool.ruff]
+line-length = 99
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

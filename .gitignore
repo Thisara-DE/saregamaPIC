@@ -1,0 +1,34 @@
+# Runtime data — SQLite DB + uploaded scan images live here.
+# Gitignored, but the repo sits inside Dropbox so data/ is still backed up.
+data/
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/dev-dist/
+*.tsbuildinfo
+
+# Local TLS certs for LAN HTTPS testing (never commit keys)
+frontend/certs/
+
+# Secrets — Claude API key etc. NEVER commit.
+.env
+*.env.local
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Claude Code — keep all local tooling/context out of git
+# (still backed up via Dropbox; agent defs + CLAUDE.md excluded by choice)
+.claude/
+CLAUDE.md

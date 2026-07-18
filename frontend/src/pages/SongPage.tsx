@@ -1,0 +1,104 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getSong, scanImageUrl, uploadScan } from "../api/client";
+import type { SongDetail } from "../api/types";
+
+interface Props {
+  songId: string;
+  onBack: () => void;
+}
+
+/**
+ * Song detail: capture/upload sheet photos and see the stored pages.
+ *
+ * Camera strategy (Phase 0): <input type="file" capture="environment">
+ * opens the native camera on phones and works over plain HTTP too — far
+ * fewer failure modes than getUserMedia. A live-preview capture UI can
+ * replace it later without touching the upload path.
+ */
+export function SongPage({ songId, onBack }: Props) {
+  const [song, setSong] = useState<SongDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const refresh = useCallback(() => {
+    getSong(songId)
+      .then(setSong)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [songId]);
+
+  useEffect(refresh, [refresh]);
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const file of Array.from(files)) {
+        await uploadScan(songId, file);
+      }
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
+      if (cameraInput.current) cameraInput.current.value = "";
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+
+  return (
+    <section>
+      <button className="back" onClick={onBack}>
+        ← Songs
+      </button>
+      <h2>{song?.title ?? "…"}</h2>
+
+      <div className="capture-actions">
+        {/* capture="environment" → rear camera straight away on mobile */}
+        <input
+          ref={cameraInput}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          onChange={(e) => void handleFiles(e.target.files)}
+        />
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(e) => void handleFiles(e.target.files)}
+        />
+        <button
+          className="primary"
+          disabled={uploading}
+          onClick={() => cameraInput.current?.click()}
+        >
+          📷 Photograph sheet
+        </button>
+        <button disabled={uploading} onClick={() => fileInput.current?.click()}>
+          Upload image…
+        </button>
+      </div>
+
+      {uploading && <p className="muted">Uploading…</p>}
+      {error && <p className="error">{error}</p>}
+
+      <ul className="scan-grid">
+        {song?.scans.map((scan) => (
+          <li key={scan.id}>
+            <img src={scanImageUrl(scan.id)} alt={`Page ${scan.page_no}`} loading="lazy" />
+            <span className="muted">Page {scan.page_no}</span>
+          </li>
+        ))}
+      </ul>
+      {song !== null && song.scans.length === 0 && !uploading && (
+        <p className="muted">No pages yet. Photograph the hand-written sheet to add one.</p>
+      )}
+    </section>
+  );
+}

@@ -1,0 +1,160 @@
+/* Mobile-first; honors light/dark. Deliberately minimal for Phase 0 —
+   real visual design happens alongside the digital-sargam view (Phase 3). */
+
+:root {
+  --bg: #f7f5ff;
+  --fg: #221c3a;
+  --muted: #6f6a85;
+  --accent: #5b45c9;
+  --accent-fg: #ffffff;
+  --card: #ffffff;
+  --error: #b3261e;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16112b;
+    --fg: #eae6ff;
+    --muted: #9d97b8;
+    --accent: #8f7bf0;
+    --accent-fg: #16112b;
+    --card: #221c3a;
+    --error: #ffb4ab;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#root {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem;
+  padding-bottom: env(safe-area-inset-bottom, 1rem);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.tagline {
+  margin: 0 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--error);
+}
+
+button {
+  font: inherit;
+  border: 1px solid var(--accent);
+  background: var(--card);
+  color: var(--fg);
+  border-radius: 0.5rem;
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.back {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0.25rem 0;
+}
+
+.new-song {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.new-song input {
+  flex: 1;
+  font: inherit;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--muted);
+  border-radius: 0.5rem;
+  background: var(--card);
+  color: var(--fg);
+}
+
+.song-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.song-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  text-align: left;
+  border: none;
+  background: var(--card);
+  padding: 0.9rem 1rem;
+  border-radius: 0.75rem;
+}
+
+.song-title {
+  font-weight: 600;
+}
+
+.capture-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.75rem 0 1rem;
+}
+
+.scan-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.scan-grid li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.scan-grid img {
+  width: 100%;
+  border-radius: 0.5rem;
+  background: var(--card);
+}
