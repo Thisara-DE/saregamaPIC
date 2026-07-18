@@ -91,8 +91,12 @@ Steps 2 and 5 change device trust settings — do them yourself, deliberately.
 
 This repo lives inside Dropbox. Two folders are marked ignored for Dropbox
 (NTFS stream `com.dropbox.ignored=1`) because sync locks break tooling:
-`frontend/node_modules` and `backend/.venv`. If you ever recreate those
-folders from scratch, re-apply:
+`frontend/node_modules` and `backend/.venv`. The stream can silently
+disappear (observed 2026-07-18 — Dropbox locks then corrupted Vite's dep
+cache and the app served broken JS). Vite's cache therefore lives OUTSIDE
+Dropbox now (`%TEMP%\saregamapic-vite-cache`, set in `vite.config.ts`), but
+the streams are still needed so npm/uv installs don't fight sync locks. If
+they're missing or you recreate those folders, re-apply:
 
 ```powershell
 Set-Content -Path frontend\node_modules -Stream com.dropbox.ignored -Value 1

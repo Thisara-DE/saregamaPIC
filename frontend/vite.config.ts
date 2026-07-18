@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -23,6 +24,10 @@ const httpsConfig =
     : undefined;
 
 export default defineConfig({
+  // The repo lives inside Dropbox; sync/file locks corrupt Vite's dep cache
+  // (EBUSY on the deps_temp -> deps rename), which serves broken modules and
+  // blank-screens the app. Keep the cache on the local disk, outside Dropbox.
+  cacheDir: path.join(os.tmpdir(), "saregamapic-vite-cache"),
   plugins: [
     react(),
     VitePWA({
