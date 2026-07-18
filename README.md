@@ -53,6 +53,11 @@ cd frontend; npm run dev
 Open http://localhost:5173 — the Vite dev server proxies `/api/*` to
 FastAPI, so there is no CORS and no base-URL config anywhere.
 
+Running a second dev instance side by side (ports already taken):
+`SAREGAMAPIC_API_PORT` points the Vite proxy at a backend on another port,
+and `SAREGAMAPIC_NO_HTTPS=1` forces plain HTTP even when `frontend/certs/`
+exists (some tooling can only reach http://localhost).
+
 ### Checks
 
 ```powershell

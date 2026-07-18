@@ -3,14 +3,22 @@
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile
 
 from ..schemas import Scan, Song, SongCreate, SongDetail
-from ..storage import extension_for, save_scan_image
+from ..storage import delete_scan_files, extension_for, save_scan_image
 
 router = APIRouter()
 
 MAX_IMAGE_BYTES = 30 * 1024 * 1024  # generous for high-res phone photos
+
+# cover_scan_id = first page, so the gallery can show a thumbnail per song.
+_SONG_SELECT = (
+    "SELECT s.*,"
+    " (SELECT COUNT(*) FROM scans WHERE song_id = s.id) AS scan_count,"
+    " (SELECT id FROM scans WHERE song_id = s.id ORDER BY page_no LIMIT 1) AS cover_scan_id"
+    " FROM songs s"
+)
 
 
 def _db(request: Request) -> sqlite3.Connection:
@@ -18,11 +26,7 @@ def _db(request: Request) -> sqlite3.Connection:
 
 
 def _song_row(conn: sqlite3.Connection, song_id: str) -> sqlite3.Row:
-    row = conn.execute(
-        "SELECT s.*, (SELECT COUNT(*) FROM scans WHERE song_id = s.id) AS scan_count"
-        " FROM songs s WHERE s.id = ?",
-        (song_id,),
-    ).fetchone()
+    row = conn.execute(f"{_SONG_SELECT} WHERE s.id = ?", (song_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Song not found")
     return row
@@ -42,11 +46,23 @@ def create_song(body: SongCreate, request: Request) -> Song:
 
 @router.get("/songs", response_model=list[Song])
 def list_songs(request: Request) -> list[Song]:
-    rows = _db(request).execute(
-        "SELECT s.*, (SELECT COUNT(*) FROM scans WHERE song_id = s.id) AS scan_count"
-        " FROM songs s ORDER BY s.created_at DESC"
-    ).fetchall()
+    rows = _db(request).execute(f"{_SONG_SELECT} ORDER BY s.created_at DESC").fetchall()
     return [Song(**dict(r)) for r in rows]
+
+
+@router.delete("/songs/{song_id}", status_code=204)
+def delete_song(song_id: str, request: Request) -> Response:
+    conn = _db(request)
+    _song_row(conn, song_id)  # 404 if unknown song
+    scans = conn.execute(
+        "SELECT id, image_path FROM scans WHERE song_id = ?", (song_id,)
+    ).fetchall()
+    conn.execute("DELETE FROM songs WHERE id = ?", (song_id,))  # scans cascade
+    conn.commit()
+    data_dir = request.app.state.settings.data_dir
+    for scan in scans:
+        delete_scan_files(data_dir, scan["image_path"], scan["id"])
+    return Response(status_code=204)
 
 
 @router.get("/songs/{song_id}", response_model=SongDetail)

@@ -7,6 +7,9 @@ export interface Song {
   notes: string;
   created_at: string;
   scan_count: number;
+  // First page's scan id (null when the song has no pages yet) — the
+  // gallery uses it to show a cover thumbnail without fetching details.
+  cover_scan_id: string | null;
 }
 
 export interface Scan {

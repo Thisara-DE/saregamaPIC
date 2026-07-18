@@ -25,6 +25,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(res.status, detail);
   }
+  if (res.status === 204) {
+    return undefined as T;
+  }
   return (await res.json()) as T;
 }
 
@@ -57,6 +60,18 @@ export function uploadScan(songId: string, file: File): Promise<Scan> {
   });
 }
 
+export function deleteSong(id: string): Promise<void> {
+  return request<void>(`/api/songs/${id}`, { method: "DELETE" });
+}
+
+export function deleteScan(id: string): Promise<void> {
+  return request<void>(`/api/scans/${id}`, { method: "DELETE" });
+}
+
 export function scanImageUrl(scanId: string): string {
   return `/api/scans/${scanId}/image`;
+}
+
+export function scanThumbnailUrl(scanId: string): string {
+  return `/api/scans/${scanId}/thumbnail`;
 }

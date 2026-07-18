@@ -9,9 +9,13 @@ import { VitePWA } from "vite-plugin-pwa";
 // generate certs with mkcert into frontend/certs/ (see README) and the dev
 // server picks them up automatically. Without certs it serves plain HTTP,
 // which is fine for desktop localhost work.
+// SAREGAMAPIC_NO_HTTPS=1 forces plain HTTP even when certs exist (used by
+// tooling that can only talk to http://localhost, e.g. browser previews).
 const certDir = path.resolve(__dirname, "certs");
 const httpsConfig =
-  fs.existsSync(path.join(certDir, "cert.pem")) && fs.existsSync(path.join(certDir, "key.pem"))
+  !process.env.SAREGAMAPIC_NO_HTTPS &&
+  fs.existsSync(path.join(certDir, "cert.pem")) &&
+  fs.existsSync(path.join(certDir, "key.pem"))
     ? {
         cert: fs.readFileSync(path.join(certDir, "cert.pem")),
         key: fs.readFileSync(path.join(certDir, "key.pem")),
@@ -58,8 +62,10 @@ export default defineConfig({
     https: httpsConfig,
     proxy: {
       // One rule: everything under /api goes to FastAPI. No CORS needed.
+      // SAREGAMAPIC_API_PORT lets a second dev instance point at its own
+      // backend when :8000 is already taken.
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: `http://127.0.0.1:${process.env.SAREGAMAPIC_API_PORT ?? "8000"}`,
         changeOrigin: true,
       },
     },

@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.116",
     "uvicorn[standard]>=0.35",
     "python-multipart>=0.0.20",
+    "pillow>=11.0",
 ]
 
 # This machine's network needs the OS trust store for TLS (uv's bundled CA

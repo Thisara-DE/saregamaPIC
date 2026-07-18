@@ -1,12 +1,9 @@
 import { useEffect, useState } from "react";
-import { createSong, listSongs } from "../api/client";
+import { Link } from "react-router-dom";
+import { createSong, listSongs, scanThumbnailUrl } from "../api/client";
 import type { Song } from "../api/types";
 
-interface Props {
-  onOpenSong: (id: string) => void;
-}
-
-export function SongsPage({ onOpenSong }: Props) {
+export function SongsPage() {
   const [songs, setSongs] = useState<Song[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -59,12 +56,24 @@ export function SongsPage({ onOpenSong }: Props) {
       <ul className="song-list">
         {songs?.map((song) => (
           <li key={song.id}>
-            <button className="song-row" onClick={() => onOpenSong(song.id)}>
+            <Link className="song-row" to={`/songs/${song.id}`}>
+              {song.cover_scan_id ? (
+                <img
+                  className="song-cover"
+                  src={scanThumbnailUrl(song.cover_scan_id)}
+                  alt=""
+                  loading="lazy"
+                />
+              ) : (
+                <span className="song-cover placeholder" aria-hidden="true">
+                  ♪
+                </span>
+              )}
               <span className="song-title">{song.title}</span>
               <span className="muted">
                 {song.scan_count} {song.scan_count === 1 ? "page" : "pages"}
               </span>
-            </button>
+            </Link>
           </li>
         ))}
       </ul>

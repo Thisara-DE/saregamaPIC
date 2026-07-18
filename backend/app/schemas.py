@@ -22,6 +22,9 @@ class Song(BaseModel):
     notes: str
     created_at: str
     scan_count: int = 0
+    # First page's scan id (None when the song has no pages yet) — the
+    # gallery uses it to show a cover thumbnail without fetching details.
+    cover_scan_id: str | None = None
 
 
 class SongDetail(Song):

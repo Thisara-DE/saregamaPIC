@@ -4,9 +4,11 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
+from app.storage import thumbnail_path
 
 # 1x1 PNG (smallest valid image payload)
 PNG_1PX = bytes.fromhex(
@@ -99,6 +101,97 @@ def test_upload_rejections(client):
 def test_validation(client):
     assert client.post("/api/songs", json={"title": ""}).status_code == 422
     assert client.get("/api/songs/missing").status_code == 404
+
+
+def _jpeg_bytes(width: int, height: int, orientation: int | None = None) -> bytes:
+    """A real JPEG, optionally with an EXIF orientation tag (pixels unrotated)."""
+    im = Image.new("RGB", (width, height), "white")
+    buf = io.BytesIO()
+    if orientation is None:
+        im.save(buf, "JPEG")
+    else:
+        exif = Image.Exif()
+        exif[0x0112] = orientation
+        im.save(buf, "JPEG", exif=exif)
+    return buf.getvalue()
+
+
+def _upload(client, song_id: str, data: bytes, content_type: str = "image/jpeg") -> dict:
+    r = client.post(
+        f"/api/songs/{song_id}/scans",
+        files={"file": ("page.jpg", io.BytesIO(data), content_type)},
+    )
+    assert r.status_code == 201
+    return r.json()
+
+
+def test_thumbnail_generated_cached_and_original_untouched(client, settings):
+    song_id = client.post("/api/songs", json={"title": "Thumbs"}).json()["id"]
+    original = _jpeg_bytes(1600, 800)
+    scan = _upload(client, song_id, original)
+
+    r = client.get(f"/api/scans/{scan['id']}/thumbnail")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/webp"
+    thumb = Image.open(io.BytesIO(r.content))
+    assert thumb.size == (512, 256)  # longest side capped, aspect kept
+
+    # cached on disk as a derived file; the original is byte-identical
+    assert thumbnail_path(settings.data_dir, scan["id"]).is_file()
+    stored = settings.images_dir / song_id / f"{scan['id']}.jpg"
+    assert stored.read_bytes() == original
+
+    # second request serves the cache (still correct)
+    assert client.get(f"/api/scans/{scan['id']}/thumbnail").status_code == 200
+    assert client.get("/api/scans/nope/thumbnail").status_code == 404
+
+
+def test_thumbnail_applies_exif_orientation(client):
+    """Phone photos: EXIF says rotate 90° — the thumbnail must bake that in."""
+    song_id = client.post("/api/songs", json={"title": "EXIF"}).json()["id"]
+    scan = _upload(client, song_id, _jpeg_bytes(1600, 800, orientation=6))
+    r = client.get(f"/api/scans/{scan['id']}/thumbnail")
+    thumb = Image.open(io.BytesIO(r.content))
+    assert thumb.size == (256, 512)  # landscape pixels + orientation 6 → portrait
+
+
+def test_delete_scan_renumbers_and_removes_files(client, settings):
+    song_id = client.post("/api/songs", json={"title": "Del scan"}).json()["id"]
+    scans = [_upload(client, song_id, _jpeg_bytes(40, 40)) for _ in range(3)]
+    client.get(f"/api/scans/{scans[1]['id']}/thumbnail")  # materialize a thumb
+
+    r = client.delete(f"/api/scans/{scans[1]['id']}")
+    assert r.status_code == 204
+
+    detail = client.get(f"/api/songs/{song_id}").json()
+    assert [s["page_no"] for s in detail["scans"]] == [1, 2]
+    assert [s["id"] for s in detail["scans"]] == [scans[0]["id"], scans[2]["id"]]
+
+    assert not (settings.images_dir / song_id / f"{scans[1]['id']}.jpg").exists()
+    assert not thumbnail_path(settings.data_dir, scans[1]["id"]).exists()
+    assert client.delete(f"/api/scans/{scans[1]['id']}").status_code == 404
+
+
+def test_delete_song_removes_scans_and_images(client, settings):
+    song_id = client.post("/api/songs", json={"title": "Del song"}).json()["id"]
+    scan = _upload(client, song_id, _jpeg_bytes(40, 40))
+    client.get(f"/api/scans/{scan['id']}/thumbnail")
+
+    assert client.delete(f"/api/songs/{song_id}").status_code == 204
+    assert client.get(f"/api/songs/{song_id}").status_code == 404
+    assert client.get(f"/api/scans/{scan['id']}/image").status_code == 404
+    assert not (settings.images_dir / song_id).exists()
+    assert not thumbnail_path(settings.data_dir, scan["id"]).exists()
+    assert client.delete("/api/songs/missing").status_code == 404
+
+
+def test_cover_scan_id(client):
+    song_id = client.post("/api/songs", json={"title": "Cover"}).json()["id"]
+    assert client.get(f"/api/songs/{song_id}").json()["cover_scan_id"] is None
+    first = _upload(client, song_id, _jpeg_bytes(40, 40))
+    _upload(client, song_id, _jpeg_bytes(40, 40))
+    listed = client.get("/api/songs").json()
+    assert next(s for s in listed if s["id"] == song_id)["cover_scan_id"] == first["id"]
 
 
 def test_token_auth(tmp_path):

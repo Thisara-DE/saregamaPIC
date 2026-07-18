@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { PageViewer } from "./pages/PageViewer";
 import { SongPage } from "./pages/SongPage";
 import { SongsPage } from "./pages/SongsPage";
 
-// Two views, one state variable. Swap for a real router (react-router) when
-// Phase 1 adds the gallery/viewer — don't grow this by hand past 3 views.
-export default function App() {
-  const [openSongId, setOpenSongId] = useState<string | null>(null);
-
+// Routing arrived with Phase 1's third view (the page viewer), per the
+// convention in CLAUDE.md. The viewer renders outside the Shell so the
+// photo gets the whole screen.
+function Shell() {
   return (
     <>
       <header className="app-header">
@@ -14,12 +14,21 @@ export default function App() {
         <p className="tagline">Point. Shoot. Sa Re Ga Ma.</p>
       </header>
       <main>
-        {openSongId === null ? (
-          <SongsPage onOpenSong={setOpenSongId} />
-        ) : (
-          <SongPage songId={openSongId} onBack={() => setOpenSongId(null)} />
-        )}
+        <Outlet />
       </main>
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route element={<Shell />}>
+        <Route path="/" element={<SongsPage />} />
+        <Route path="/songs/:songId" element={<SongPage />} />
+      </Route>
+      <Route path="/songs/:songId/pages/:pageNo" element={<PageViewer />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
