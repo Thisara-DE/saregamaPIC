@@ -25,6 +25,15 @@ class Settings:
     # Optional single-user bearer token. Empty (default) = no auth, fine for
     # LAN-only use. Set SAREGAMAPIC_API_TOKEN before exposing beyond the LAN.
     api_token: str = field(default_factory=lambda: os.environ.get("SAREGAMAPIC_API_TOKEN", ""))
+    # Claude vision recognition (Phase 2). The key is read from the environment
+    # and NEVER committed or written to the vault. Empty = recognition returns a
+    # clean 503 until a key is exported.
+    anthropic_api_key: str = field(
+        default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
+    )
+    recognition_model: str = field(
+        default_factory=lambda: os.environ.get("SAREGAMAPIC_MODEL", "claude-opus-4-8")
+    )
 
     @property
     def db_path(self) -> Path:

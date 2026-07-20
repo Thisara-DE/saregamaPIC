@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn[standard]>=0.35",
     "python-multipart>=0.0.20",
     "pillow>=11.0",
+    "anthropic>=0.69",
+    "truststore>=0.10.4",
 ]
 
 # This machine's network needs the OS trust store for TLS (uv's bundled CA

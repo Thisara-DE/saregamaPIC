@@ -34,3 +34,41 @@ class SongDetail(Song):
 class Health(BaseModel):
     status: str
     version: str
+
+
+# --- Transcriptions (STF) — mirror in frontend/src/api/types.ts by hand ---
+
+
+class StfHeader(BaseModel):
+    concert_scale: str = ""
+    alto_scale: str = ""
+    beat: str = ""
+
+
+class StfLine(BaseModel):
+    n: int
+    kind: str  # section | sargam | run | lyric | roadmap | annotation
+    text: str
+
+
+class Stf(BaseModel):
+    header: StfHeader = Field(default_factory=StfHeader)
+    lines: list[StfLine] = Field(default_factory=list)
+
+
+class Transcription(BaseModel):
+    id: str
+    scan_id: str
+    status: str  # draft | reviewed
+    stf: Stf
+    warnings: list[str] = []
+    # Recognition cost metrics (None for a manually-typed transcription).
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    updated_at: str
+
+
+class TranscriptionSave(BaseModel):
+    stf: Stf
+    status: str = Field(default="draft", pattern="^(draft|reviewed)$")

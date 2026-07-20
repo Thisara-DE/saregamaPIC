@@ -28,3 +28,38 @@ export interface Health {
   status: string;
   version: string;
 }
+
+// --- Transcriptions (STF) — mirror backend/app/schemas.py by hand ---
+
+export interface StfHeader {
+  concert_scale: string;
+  alto_scale: string;
+  beat: string;
+}
+
+// kind: section | sargam | run | lyric | roadmap | annotation
+export interface StfLine {
+  n: number;
+  kind: string;
+  text: string;
+}
+
+export interface Stf {
+  header: StfHeader;
+  lines: StfLine[];
+}
+
+export type TranscriptionStatus = "draft" | "reviewed";
+
+export interface Transcription {
+  id: string;
+  scan_id: string;
+  status: TranscriptionStatus;
+  stf: Stf;
+  warnings: string[];
+  // Recognition cost metrics (null for a manually-typed transcription).
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  updated_at: string;
+}

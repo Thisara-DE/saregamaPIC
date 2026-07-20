@@ -1,7 +1,15 @@
 // Thin typed fetch wrapper. All paths are same-origin /api/* — the Vite dev
 // server proxies them to FastAPI, so no CORS and no base-URL configuration.
 
-import type { Health, Scan, Song, SongDetail } from "./types";
+import type {
+  Health,
+  Scan,
+  Song,
+  SongDetail,
+  Stf,
+  Transcription,
+  TranscriptionStatus,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -66,6 +74,28 @@ export function deleteSong(id: string): Promise<void> {
 
 export function deleteScan(id: string): Promise<void> {
   return request<void>(`/api/scans/${id}`, { method: "DELETE" });
+}
+
+// --- Transcriptions (STF) ---
+
+export function getTranscription(scanId: string): Promise<Transcription> {
+  return request<Transcription>(`/api/scans/${scanId}/transcription`);
+}
+
+export function recognizeScan(scanId: string): Promise<Transcription> {
+  return request<Transcription>(`/api/scans/${scanId}/recognize`, { method: "POST" });
+}
+
+export function saveTranscription(
+  scanId: string,
+  stf: Stf,
+  status: TranscriptionStatus,
+): Promise<Transcription> {
+  return request<Transcription>(`/api/scans/${scanId}/transcription`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stf, status }),
+  });
 }
 
 export function scanImageUrl(scanId: string): string {

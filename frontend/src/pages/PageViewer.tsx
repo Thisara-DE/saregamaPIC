@@ -60,6 +60,14 @@ export function PageViewer() {
         </span>
         <button
           className="viewer-btn"
+          aria-label="Transcribe page"
+          title="Transcribe"
+          onClick={() => navigate(`/songs/${songId}/pages/${page}/edit`)}
+        >
+          ✎
+        </button>
+        <button
+          className="viewer-btn"
           aria-label="Delete page"
           onClick={() => void handleDeletePage()}
         >
