@@ -399,6 +399,49 @@ button:disabled {
   padding-left: 1.1rem;
 }
 
+.stf-legend {
+  margin: 0 0 1rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.stf-legend code {
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--muted);
+  border-radius: 0.25rem;
+  padding: 0 0.25rem;
+}
+
+/* Tap-to-toggle mark bar, shown under the focused note line. */
+.stf-mark-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.5rem 0;
+}
+
+.stf-mark-bar button {
+  min-width: 2.1rem;
+  min-height: 2.1rem;
+  font-size: 1rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--muted);
+  border-radius: 0.4rem;
+  background: var(--card);
+  color: var(--fg);
+}
+
+.stf-mark-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0.15rem 0.25rem;
+  background: var(--muted);
+}
+
 .stf-lines {
   list-style: none;
   margin: 0;
@@ -493,4 +536,27 @@ button:disabled {
   line-height: 0.6;
   height: 0.6em;
   color: var(--mark);
+}
+
+/* A curve group: an arc drawn under the notes (like a slur), not literal
+   parens. Auto-sizes to the group width. Neutral colour so it reads as
+   structure, distinct from the loud --mark accidental accent. */
+.stf-curve {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-end;
+  padding-bottom: 0.4em;
+}
+
+.stf-curve::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0.05em;
+  height: 0.4em;
+  border: 2px solid var(--fg);
+  border-top: none;
+  border-radius: 0 0 60% 60% / 0 0 100% 100%;
+  opacity: 0.5;
 }

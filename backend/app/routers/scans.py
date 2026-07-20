@@ -5,7 +5,7 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
-from ..storage import delete_scan_files, ensure_thumbnail
+from ..storage import delete_scan_files, ensure_preview, ensure_thumbnail
 
 router = APIRouter()
 
@@ -40,6 +40,22 @@ def get_scan_thumbnail(scan_id: str, request: Request) -> FileResponse:
             status_code=415, detail="Cannot decode this image format for thumbnailing"
         )
     return FileResponse(thumb, media_type="image/webp")
+
+
+@router.get("/scans/{scan_id}/preview")
+def get_scan_preview(scan_id: str, request: Request) -> FileResponse:
+    """A downscaled copy for the correction editor — legible marks without the
+    4000x3000 original's sluggishness. Pure cache; the original is untouched."""
+    row = _scan_row(request, scan_id)
+    data_dir = request.app.state.settings.data_dir
+    if not (data_dir / row["image_path"]).is_file():
+        raise HTTPException(status_code=404, detail="Image file missing from data dir")
+    preview = ensure_preview(data_dir, row["image_path"], scan_id)
+    if preview is None:
+        raise HTTPException(
+            status_code=415, detail="Cannot decode this image format for preview"
+        )
+    return FileResponse(preview, media_type="image/webp")
 
 
 @router.delete("/scans/{scan_id}", status_code=204)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
@@ -6,13 +6,27 @@ import {
   getTranscription,
   recognizeScan,
   saveTranscription,
-  scanImageUrl,
+  scanPreviewUrl,
 } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
+import { insertToken, toggleMark, type Mark } from "../stfEdit";
 import type { Stf, StfLine, Transcription, TranscriptionStatus } from "../api/types";
 
 const KINDS = ["sargam", "run", "section", "lyric", "roadmap", "annotation"] as const;
 const NOTE_KINDS = new Set(["sargam", "run"]);
+
+// Tap-to-toggle marks so the reviewer never has to remember the ASCII suffixes.
+const MARK_BUTTONS: { label: string; title: string; mark: Mark }[] = [
+  { label: "♭", title: "Flat — dash below (R G D N)", mark: "_" },
+  { label: "♯", title: "Sharp — tick above (M only)", mark: "^" },
+  { label: "●̇", title: "Octave up — dot above", mark: "'" },
+  { label: "●̣", title: "Octave down — dot below", mark: "," },
+];
+const INSERT_BUTTONS: { label: string; title: string; token: string }[] = [
+  { label: "−", title: "Hold the previous note one more beat", token: "-" },
+  { label: "+", title: "One-beat rest", token: "+" },
+  { label: "|", title: "Barline", token: "|" },
+];
 
 const EMPTY_STF: Stf = { header: { concert_scale: "", alto_scale: "", beat: "" }, lines: [] };
 
@@ -39,6 +53,21 @@ export function EditorPage() {
   const [hasTranscription, setHasTranscription] = useState(false);
   const [busy, setBusy] = useState<"load" | "recognize" | "save" | null>("load");
   const [error, setError] = useState<string | null>(null);
+  // The line whose mark bar is showing, and a handle on its focused <input> so
+  // a bar tap can read/restore the caret without the input losing focus.
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const activeInputRef = useRef<HTMLInputElement | null>(null);
+  // A mark-bar edit sets a target caret; reassigning a controlled input's value
+  // parks the caret at the end, so we restore it AFTER React commits — a layout
+  // effect wins that race where requestAnimationFrame does not.
+  const pendingCaret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingCaret.current !== null && activeInputRef.current) {
+      const at = pendingCaret.current;
+      activeInputRef.current.setSelectionRange(at, at);
+      pendingCaret.current = null;
+    }
+  });
 
   const apply = useCallback((t: Transcription) => {
     setStf(t.stf);
@@ -133,6 +162,20 @@ export function EditorPage() {
     }));
   }
 
+  // Apply a mark-bar edit to line `i` at its live caret, then put the caret
+  // back where the transform asks (the controlled input re-renders otherwise).
+  function editLine(
+    i: number,
+    text: string,
+    fn: (text: string, caret: number) => { text: string; caret: number },
+  ) {
+    const el = activeInputRef.current;
+    const caret = el?.selectionStart ?? text.length;
+    const next = fn(text, caret);
+    pendingCaret.current = next.caret; // restored in the layout effect above
+    setLine(i, { text: next.text });
+  }
+
   return (
     <div className="editor">
       <div className="editor-bar">
@@ -156,7 +199,7 @@ export function EditorPage() {
 
       <div className="editor-split">
         <div className="editor-photo">
-          {scanId && <img src={scanImageUrl(scanId)} alt={`Page ${page} of ${title}`} />}
+          {scanId && <img src={scanPreviewUrl(scanId)} alt={`Page ${page} of ${title}`} />}
         </div>
 
         <div className="editor-form">
@@ -197,6 +240,12 @@ export function EditorPage() {
             </label>
           </fieldset>
 
+          <p className="stf-legend">
+            Marks: <code>_</code> flat · <code>^</code> sharp (M) · <code>'</code> octave up ·{" "}
+            <code>,</code> octave down · <code>-</code> hold · <code>+</code> rest · <code>|</code>{" "}
+            bar · <code>( )</code> curve. Tap a note, then a button below — no need to type them.
+          </p>
+
           {warnings.length > 0 && (
             <div className="stf-warnings" role="status">
               <strong>⚠ {warnings.length} to check</strong>
@@ -228,6 +277,11 @@ export function EditorPage() {
                     value={line.text}
                     aria-label={`Line ${line.n} text`}
                     spellCheck={false}
+                    onFocus={(e) => {
+                      setActiveLine(i);
+                      activeInputRef.current = e.currentTarget;
+                    }}
+                    onBlur={() => setActiveLine((cur) => (cur === i ? null : cur))}
                     onChange={(e) => setLine(i, { text: e.target.value })}
                   />
                   <button
@@ -238,6 +292,33 @@ export function EditorPage() {
                     ✕
                   </button>
                 </div>
+                {activeLine === i && NOTE_KINDS.has(line.kind) && (
+                  // preventDefault on mousedown keeps the input focused + its
+                  // caret intact, so the tap edits the note the caret is on.
+                  <div className="stf-mark-bar" onMouseDown={(e) => e.preventDefault()}>
+                    {MARK_BUTTONS.map((b) => (
+                      <button
+                        key={b.mark}
+                        title={b.title}
+                        aria-label={b.title}
+                        onClick={() => editLine(i, line.text, (t, c) => toggleMark(t, c, b.mark))}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                    <span className="stf-mark-sep" aria-hidden="true" />
+                    {INSERT_BUTTONS.map((b) => (
+                      <button
+                        key={b.token}
+                        title={b.title}
+                        aria-label={b.title}
+                        onClick={() => editLine(i, line.text, (t, c) => insertToken(t, c, b.token))}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {NOTE_KINDS.has(line.kind) && line.text && (
                   <div className="stf-line-preview">
                     <StfLineText text={line.text} />

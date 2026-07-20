@@ -73,6 +73,21 @@ describe("StfLineText", () => {
     expect(container.querySelector(".stf-note.flat")).not.toBeNull();
     expect(container.querySelector(".stf-note.sharp")).not.toBeNull();
   });
+
+  it("renders a curve group as an arc, not literal parens", () => {
+    const { container } = render(<StfLineText text="G (SRGM) P" />);
+    const curve = container.querySelector(".stf-curve");
+    expect(curve).not.toBeNull();
+    expect(curve?.querySelectorAll(".stf-note")).toHaveLength(4); // S R G M inside
+    expect(container.textContent).not.toContain("("); // parens dropped, arc drawn
+    expect(container.textContent).not.toContain(")");
+  });
+
+  it("leaves an unclosed curve paren as literal text (mid-typing)", () => {
+    const { container } = render(<StfLineText text="G (SR" />);
+    expect(container.querySelector(".stf-curve")).toBeNull();
+    expect(container.textContent).toContain("(");
+  });
 });
 
 describe("EditorPage", () => {
@@ -99,7 +114,7 @@ describe("EditorPage", () => {
     expect(screen.getByRole("button", { name: "Re-recognize" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /Page 1 of/ })).toHaveAttribute(
       "src",
-      "/api/scans/scan1/image",
+      "/api/scans/scan1/preview",
     );
   });
 

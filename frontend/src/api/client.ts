@@ -105,3 +105,9 @@ export function scanImageUrl(scanId: string): string {
 export function scanThumbnailUrl(scanId: string): string {
   return `/api/scans/${scanId}/thumbnail`;
 }
+
+// Downscaled copy for the correction editor — legible marks without the
+// full-res original's sluggishness. The viewer still uses scanImageUrl.
+export function scanPreviewUrl(scanId: string): string {
+  return `/api/scans/${scanId}/preview`;
+}

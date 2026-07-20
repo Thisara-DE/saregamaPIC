@@ -48,21 +48,45 @@ function Note({ token }: { token: string }) {
   );
 }
 
-export function StfLineText({ text }: { text: string }) {
+/** Render notes + literal passthrough (holds, rests, barlines, brackets). */
+function renderInline(text: string, key: { n: number }): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
   NOTE_RE.lastIndex = 0;
-  let key = 0;
   while ((m = NOTE_RE.exec(text)) !== null) {
     if (m.index > last) {
-      nodes.push(<Fragment key={key++}>{text.slice(last, m.index)}</Fragment>);
+      nodes.push(<Fragment key={key.n++}>{text.slice(last, m.index)}</Fragment>);
     }
-    nodes.push(<Note key={key++} token={m[0]} />);
+    nodes.push(<Note key={key.n++} token={m[0]} />);
     last = m.index + m[0].length;
   }
   if (last < text.length) {
-    nodes.push(<Fragment key={key++}>{text.slice(last)}</Fragment>);
+    nodes.push(<Fragment key={key.n++}>{text.slice(last)}</Fragment>);
   }
+  return nodes;
+}
+
+// A curve `( … )` is drawn on paper as an arc UNDER the group, not literal
+// parens. Match balanced (non-nested) groups; a still-open `(` (mid-typing)
+// falls through as literal text until the reviewer closes it.
+const CURVE_RE = /\(([^)]*)\)/g;
+
+export function StfLineText({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  const key = { n: 0 };
+  let last = 0;
+  let m: RegExpExecArray | null;
+  CURVE_RE.lastIndex = 0;
+  while ((m = CURVE_RE.exec(text)) !== null) {
+    if (m.index > last) nodes.push(...renderInline(text.slice(last, m.index), key));
+    nodes.push(
+      <span key={key.n++} className="stf-curve">
+        {renderInline(m[1] ?? "", key)}
+      </span>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) nodes.push(...renderInline(text.slice(last), key));
   return <span className="stf-line-render">{nodes}</span>;
 }

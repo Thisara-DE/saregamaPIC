@@ -8,7 +8,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
-from app.storage import thumbnail_path
+from app.storage import preview_path, thumbnail_path
 
 # 1x1 PNG (smallest valid image payload)
 PNG_1PX = bytes.fromhex(
@@ -155,10 +155,30 @@ def test_thumbnail_applies_exif_orientation(client):
     assert thumb.size == (256, 512)  # landscape pixels + orientation 6 → portrait
 
 
+def test_preview_downscales_and_leaves_original_untouched(client, settings):
+    song_id = client.post("/api/songs", json={"title": "Preview"}).json()["id"]
+    original = _jpeg_bytes(4000, 3000)  # full-res original: too heavy for the editor
+    scan = _upload(client, song_id, original)
+
+    r = client.get(f"/api/scans/{scan['id']}/preview")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/webp"
+    preview = Image.open(io.BytesIO(r.content))
+    assert preview.size == (1600, 1200)  # longest side capped at 1600, aspect kept
+
+    assert preview_path(settings.data_dir, scan["id"]).is_file()
+    stored = settings.images_dir / song_id / f"{scan['id']}.jpg"
+    assert stored.read_bytes() == original  # original byte-identical
+
+    assert client.get(f"/api/scans/{scan['id']}/preview").status_code == 200  # cached
+    assert client.get("/api/scans/nope/preview").status_code == 404
+
+
 def test_delete_scan_renumbers_and_removes_files(client, settings):
     song_id = client.post("/api/songs", json={"title": "Del scan"}).json()["id"]
     scans = [_upload(client, song_id, _jpeg_bytes(40, 40)) for _ in range(3)]
-    client.get(f"/api/scans/{scans[1]['id']}/thumbnail")  # materialize a thumb
+    client.get(f"/api/scans/{scans[1]['id']}/thumbnail")  # materialize derived files
+    client.get(f"/api/scans/{scans[1]['id']}/preview")
 
     r = client.delete(f"/api/scans/{scans[1]['id']}")
     assert r.status_code == 204
@@ -169,6 +189,7 @@ def test_delete_scan_renumbers_and_removes_files(client, settings):
 
     assert not (settings.images_dir / song_id / f"{scans[1]['id']}.jpg").exists()
     assert not thumbnail_path(settings.data_dir, scans[1]["id"]).exists()
+    assert not preview_path(settings.data_dir, scans[1]["id"]).exists()
     assert client.delete(f"/api/scans/{scans[1]['id']}").status_code == 404
 
 
