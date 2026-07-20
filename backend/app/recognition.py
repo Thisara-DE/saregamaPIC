@@ -83,12 +83,18 @@ Octave dots (distinct from the flat DASH — this is the #1 confusion, look care
 - Marks combine in any order; a lower-octave flat Re is R_, (dash below + dot below).
 
 Rhythm and structure, transcribed inline in the note text:
-- `-`  after a note: hold the previous note one more beat.
+- A lone note = one beat (a quarter note in 4/4). A single un-held note is just the
+  bare letter — do NOT append `-` to it and do NOT wrap it in a curve.
+- `-`  after a note: hold the previous note ONE more beat. Only for a note genuinely
+  sustained across beats (e.g. R - - - held four beats); never a trailing `-` on a
+  single quarter note.
 - `+`  a one-beat REST (silence). Distinct from `-`.
 - `|`  a barline.
 - `//` repeat the section.
 - `( … )` a curve drawn under a group of notes (the group shares one beat), e.g. (SRGM).
-  A curve always spans two or more notes and may contain `-` or `+` as slots, e.g. (+GG).
+  A curve ALWAYS spans two or more notes and may contain `-` or `+` as slots, e.g.
+  (+GG). NEVER put a single note in `( )`: a flat-underline or an octave-dot beneath
+  ONE note is an accidental/octave mark (encode R_ / S,), not a curve.
 - `[ … ]` a passage for another instrument / decoration. Keep it as-is.
 
 ## The header
