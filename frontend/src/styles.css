@@ -544,8 +544,10 @@ button:disabled {
 .stf-curve {
   position: relative;
   display: inline-flex;
-  align-items: flex-end;
-  padding-bottom: 0.4em;
+  align-items: center;
+  /* Align the whole group like a bare note — both are .stf-note underneath, so
+     they must share vertical-align, else the curved notes drop off the line. */
+  vertical-align: middle;
 }
 
 .stf-curve::after {
@@ -553,7 +555,7 @@ button:disabled {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0.05em;
+  bottom: -0.05em; /* arc sits just below the group, in the lower-dots band */
   height: 0.4em;
   border: 2px solid var(--fg);
   border-top: none;
