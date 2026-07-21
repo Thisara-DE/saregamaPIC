@@ -329,10 +329,21 @@ button:disabled {
   color: #111; /* native dropdown list renders on the OS surface */
 }
 
+.digital-controls select optgroup {
+  /* The "Concert / Alto" group label defaults to a faint grey on the OS
+     dropdown surface — darken it so the column headers stay readable. */
+  color: #111;
+}
+
 .viewer-btn.reset-key {
   min-height: 2rem;
   min-width: auto;
   font-size: 0.8rem;
+}
+
+.key-hint {
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 /* Digital sargam render on the dark stage. Pin the mark/curve accent to light

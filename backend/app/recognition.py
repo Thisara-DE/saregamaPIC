@@ -91,10 +91,15 @@ Rhythm and structure, transcribed inline in the note text:
 - `+`  a one-beat REST (silence). Distinct from `-`.
 - `|`  a barline.
 - `//` repeat the section.
-- `( … )` a curve drawn under a group of notes (the group shares one beat), e.g. (SRGM).
-  A curve ALWAYS spans two or more notes and may contain `-` or `+` as slots, e.g.
-  (+GG). NEVER put a single note in `( )`: a flat-underline or an octave-dot beneath
-  ONE note is an accidental/octave mark (encode R_ / S,), not a curve.
+- `( … )` a curve drawn under a group that shares one beat, e.g. (SRGM). It holds
+  two or more SLOTS — a slot is a note, a `-` (hold), or a `+` (rest). A slot BEFORE
+  a note delays that note within the beat, so a curve may legitimately hold a single
+  note: `(-G)` = the first half of the beat is silent/held and G lands on the
+  half-beat. That is NOT the same as a plain `G` — KEEP `(-G)` verbatim, never
+  collapse it. But `(G-)` (note on the beat, then held through it) equals a plain
+  quarter note — write bare `G`. And a single note with NO slot — a bare `(S)`, or a
+  flat-underline / octave-dot beneath ONE note — is an accidental/octave mark
+  (encode R_ / S,) or a phantom curve, never a real curve: write the bare note.
 - `[ … ]` a passage for another instrument / decoration. Keep it as-is.
 
 ## The header

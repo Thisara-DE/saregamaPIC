@@ -25,9 +25,14 @@ def test_alien_letter_flagged_as_misread():
     assert validate_stf(_sargam("S R G M P D N")) == []
 
 
-def test_curve_group_must_span_two_notes():
-    assert any("fewer than 2 notes" in w for w in validate_stf(_sargam("(S) R")))
+def test_curve_group_must_span_two_slots():
+    # A single bare note in parens is a phantom curve (or a misread accidental).
+    assert any("fewer than 2 slots" in w for w in validate_stf(_sargam("(S) R")))
     assert validate_stf(_sargam("(GM) R")) == []
+    # A leading hold/rest slot delays a lone note to the half-beat — a legal curve
+    # that must be preserved, not collapsed to a bare note.
+    assert validate_stf(_sargam("(-G) R")) == []
+    assert validate_stf(_sargam("(+G) R")) == []
 
 
 def test_header_nine_semitone_cross_check():

@@ -73,7 +73,7 @@ def _note_warnings(letter: str, mods: str, line_no: int, token: str) -> list[str
 
 
 def _line_warnings(line_no: int, text: str) -> list[str]:
-    """Per-line checks: illegal accidentals, alien letters, curves spanning < 2 notes."""
+    """Per-line checks: illegal accidentals, alien letters, curves spanning < 2 slots."""
     warnings: list[str] = []
     for m in _NOTE_RE.finditer(text):
         token = m.group()
@@ -82,10 +82,13 @@ def _line_warnings(line_no: int, text: str) -> list[str]:
     # in the first live eval the model read some notes as "B" (not in the system).
     for alien in sorted(set(_ALIEN_LETTER_RE.findall(text)) - NATURAL_PC.keys()):
         warnings.append(f"line {line_no}: '{alien}' is not a sargam note — likely a misread")
-    # Curve groups: each (...) must span at least two notes.
+    # Curve groups: each (...) must span at least two SLOTS — a slot is a note, a
+    # `-` (hold) or a `+` (rest). A leading slot delays a lone note within the beat,
+    # so `(-G)` / `(+G)` are legal (half-beat entries); only a single bare note is not.
     for group in re.findall(r"\(([^()]*)\)", text):
-        if len(_NOTE_RE.findall(group)) < 2:
-            warnings.append(f"line {line_no}: a curve group '({group})' spans fewer than 2 notes")
+        slots = len(_NOTE_RE.findall(group)) + group.count("-") + group.count("+")
+        if slots < 2:
+            warnings.append(f"line {line_no}: a curve group '({group})' spans fewer than 2 slots")
     return warnings
 
 

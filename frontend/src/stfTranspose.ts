@@ -78,21 +78,23 @@ export function scalePitchClass(scale: string): number | null {
   return ((pc % 12) + 12) % 12;
 }
 
-// Display names for the 12 chromatic scales, indexed by pitch class. Sharps are
-// used for the black keys (a plain, unambiguous convention for the key selector;
-// the header's own strings are shown verbatim where they exist).
+// Display names for the 12 chromatic scales, indexed by pitch class. Flats are
+// used for the black keys (F♯ the lone exception — the standard "favorite"
+// spelling), because real music — and this app's stored headers — key in flats
+// (E♭, B♭, A♭…), never in D♯/A♯. A song's own header string is still shown
+// verbatim where it exists; this table only names DERIVED (transposed) scales.
 export const SCALE_NAMES: readonly string[] = [
   "C",
-  "C♯",
+  "D♭",
   "D",
-  "D♯",
+  "E♭",
   "E",
   "F",
   "F♯",
   "G",
-  "G♯",
+  "A♭",
   "A",
-  "A♯",
+  "B♭",
   "B",
 ];
 

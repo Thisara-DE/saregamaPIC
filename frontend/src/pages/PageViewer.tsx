@@ -173,9 +173,18 @@ export function PageViewer() {
                   }))
                     .sort((a, b) => a.concertPc - b.concertPc)
                     .map(({ concertPc, altoPc }) => {
-                      const concert = pitchClassName(concertPc);
-                      const alto = pitchClassName(altoPc);
                       const original = concertPc === sourcePc;
+                      // The Original row echoes the header's verbatim scale strings
+                      // so it can never disagree with the "Concert …" line above;
+                      // every other row is named from the flat-preferring table.
+                      const concert =
+                        original && stf.header.concert_scale
+                          ? stf.header.concert_scale
+                          : pitchClassName(concertPc);
+                      const alto =
+                        original && stf.header.alto_scale
+                          ? stf.header.alto_scale
+                          : pitchClassName(altoPc);
                       // nbsp padding + a monospace select align the two columns.
                       const label =
                         concert.padEnd(2, NBSP) +
@@ -190,6 +199,7 @@ export function PageViewer() {
                     })}
                 </optgroup>
               </select>
+              <span className="key-hint">Concert → Alto = up a major 6th (down a minor 3rd)</span>
             </label>
           ) : (
             <span className="muted">Header scale unknown — showing the original scale.</span>
