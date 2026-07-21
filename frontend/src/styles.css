@@ -274,6 +274,128 @@ button:disabled {
   right: 0.5rem;
 }
 
+/* Original ↔ Digital segmented toggle in the viewer bar. */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.view-toggle button {
+  border: none;
+  background: transparent;
+  color: #eee;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.view-toggle button.on {
+  background: rgba(255, 255, 255, 0.9);
+  color: #111;
+}
+
+/* Scale selector row (digital view only). */
+.digital-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  color: #eee;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  flex-wrap: wrap;
+}
+
+.digital-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.digital-controls select {
+  background: rgba(255, 255, 255, 0.12);
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.9rem;
+  /* Monospace so the nbsp-padded Alto/Concert columns line up in the list. */
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+}
+
+.digital-controls select option {
+  color: #111; /* native dropdown list renders on the OS surface */
+}
+
+.viewer-btn.reset-key {
+  min-height: 2rem;
+  min-width: auto;
+  font-size: 0.8rem;
+}
+
+/* Digital sargam render on the dark stage. Pin the mark/curve accent to light
+   values so StfLineText reads on black regardless of the OS theme (the viewer
+   is always dark), then reuse the faithful .stf-* rendering verbatim. */
+.viewer-stage.digital {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.viewer-digital {
+  --fg: #eae6ff;
+  --mark: #ff8fa3;
+  color: #eae6ff;
+  width: 100%;
+  max-width: 900px;
+}
+
+.digital-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: #bdb8d8;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.transposed-tag {
+  color: #ff8fa3;
+}
+
+.digital-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.digital-line {
+  margin: 0.15rem 0;
+}
+
+.digital-line.kind-section .digital-text {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: #eae6ff;
+  display: inline-block;
+  margin-top: 0.6rem;
+}
+
+.digital-line.kind-lyric .digital-text {
+  color: #bdb8d8;
+  font-style: italic;
+}
+
+.digital-line.kind-roadmap .digital-text,
+.digital-line.kind-annotation .digital-text {
+  color: #9d97b8;
+  font-size: 0.9rem;
+}
+
 /* Correction editor: photo ↔ editable STF, full-screen (escapes #root). */
 
 .editor {
