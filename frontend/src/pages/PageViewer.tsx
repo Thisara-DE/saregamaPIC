@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, deleteScan, getSong, getTranscription, scanImageUrl } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
-import { pitchClassName, scalePitchClass, transposeLineOfKind } from "../stfTranspose";
+import {
+  pitchClassName,
+  scalePitchClass,
+  transposeLineOfKind,
+  transposeSemitones,
+} from "../stfTranspose";
 import type { SongDetail, Transcription } from "../api/types";
 
 type View = "original" | "digital";
@@ -27,6 +32,10 @@ export function PageViewer() {
   const [transcription, setTranscription] = useState<Transcription | null>(null);
   // Target tonic as a pitch class; null = the stored (original) scale — identity.
   const [targetPc, setTargetPc] = useState<number | null>(null);
+  // Manual whole-octave nudge on the transposed view (× 12 semitones). The
+  // Key selector auto-picks the nearest octave; this shifts the whole line
+  // up/down from there for register preference. Reset whenever the key changes.
+  const [octaveShift, setOctaveShift] = useState(0);
 
   const page = Number(pageNo);
   const scans = useMemo(() => song?.scans ?? [], [song]);
@@ -43,6 +52,7 @@ export function PageViewer() {
   useEffect(() => {
     setView("original");
     setTargetPc(null);
+    setOctaveShift(0);
     setTranscription(null);
     if (!scan) return;
     let cancelled = false;
@@ -94,17 +104,20 @@ export function PageViewer() {
   // header has no parseable scale — then transposition is unavailable.
   const sourcePc = stf ? scalePitchClass(stf.header.concert_scale) : null;
   const canTranspose = sourcePc !== null;
-  const semitones =
-    targetPc !== null && sourcePc !== null ? (((targetPc - sourcePc) % 12) + 12) % 12 : 0;
+  // Base key change picks the nearest octave (signed, [-5,+6]); the manual nudge
+  // adds whole octaves. keyChanged = a different tonic is selected (octave nudge
+  // alone doesn't count as a transposition — the scale is unchanged).
+  const baseSemitones =
+    targetPc !== null && sourcePc !== null ? transposeSemitones(sourcePc, targetPc) : 0;
+  const keyChanged = baseSemitones !== 0;
+  const semitones = baseSemitones + (keyChanged ? octaveShift * 12 : 0);
 
   // Header labels for the (possibly transposed) view: verbatim in the original
-  // scale, derived (concert = target, alto = target + 9) once transposed.
+  // scale, derived (concert = target, alto = target + 9) once the key changes.
   const shownConcert =
-    semitones === 0 || sourcePc === null ? stf?.header.concert_scale : pitchClassName(targetPc!);
+    !keyChanged || sourcePc === null ? stf?.header.concert_scale : pitchClassName(targetPc!);
   const shownAlto =
-    semitones === 0 || sourcePc === null
-      ? stf?.header.alto_scale
-      : pitchClassName(targetPc! + 9);
+    !keyChanged || sourcePc === null ? stf?.header.alto_scale : pitchClassName(targetPc! + 9);
 
   return (
     <div className="viewer">
@@ -164,6 +177,7 @@ export function PageViewer() {
                 onChange={(e) => {
                   const pc = Number(e.target.value);
                   setTargetPc(pc === sourcePc ? null : pc);
+                  setOctaveShift(0); // fresh nearest-octave default for the new key
                 }}
               >
                 <optgroup label={`Concert${NBSP.repeat(4)}Alto`}>
@@ -204,8 +218,34 @@ export function PageViewer() {
           ) : (
             <span className="muted">Header scale unknown — showing the original scale.</span>
           )}
-          {semitones !== 0 && (
-            <button className="viewer-btn reset-key" onClick={() => setTargetPc(null)}>
+          {keyChanged && (
+            <span className="octave-nudge" role="group" aria-label="Octave">
+              <button
+                className="viewer-btn oct-btn"
+                onClick={() => setOctaveShift((s) => Math.min(2, s + 1))}
+                disabled={octaveShift >= 2}
+                title="Shift the whole line up one octave"
+              >
+                8va▲
+              </button>
+              <button
+                className="viewer-btn oct-btn"
+                onClick={() => setOctaveShift((s) => Math.max(-2, s - 1))}
+                disabled={octaveShift <= -2}
+                title="Shift the whole line down one octave"
+              >
+                8va▼
+              </button>
+            </span>
+          )}
+          {keyChanged && (
+            <button
+              className="viewer-btn reset-key"
+              onClick={() => {
+                setTargetPc(null);
+                setOctaveShift(0);
+              }}
+            >
               Reset
             </button>
           )}
@@ -231,8 +271,12 @@ export function PageViewer() {
                 {shownConcert && <span>Concert {shownConcert}</span>}
                 {shownAlto && <span>Alto {shownAlto}</span>}
                 {stf.header.beat && <span>{stf.header.beat}</span>}
-                {semitones !== 0 && (
-                  <span className="transposed-tag">transposed +{semitones}</span>
+                {keyChanged && (
+                  <span className="transposed-tag">
+                    transposed
+                    {octaveShift !== 0 &&
+                      ` · ${octaveShift > 0 ? "+" : "−"}${Math.abs(octaveShift)} 8va`}
+                  </span>
                 )}
               </div>
             )}

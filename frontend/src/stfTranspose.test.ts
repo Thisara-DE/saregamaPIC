@@ -4,6 +4,7 @@ import {
   scalePitchClass,
   transposeLine,
   transposeLineOfKind,
+  transposeSemitones,
 } from "./stfTranspose";
 
 describe("scalePitchClass", () => {
@@ -38,6 +39,29 @@ describe("pitchClassName", () => {
     expect(pitchClassName(11)).toBe("B");
     expect(pitchClassName(12)).toBe("C");
     expect(pitchClassName(-1)).toBe("B");
+  });
+});
+
+describe("transposeSemitones — nearest octave", () => {
+  it("folds the interval to the representative closest to zero [-5,+6]", () => {
+    expect(transposeSemitones(7, 2)).toBe(-5); // G -> D: down a 4th, not +7 up a 5th
+    expect(transposeSemitones(2, 7)).toBe(5); //  D -> G: up a 4th
+    expect(transposeSemitones(0, 11)).toBe(-1); // C -> B: down a semitone, not +11
+    expect(transposeSemitones(0, 1)).toBe(1); //  C -> C#: up a semitone
+    expect(transposeSemitones(0, 6)).toBe(6); //  tritone stays +6
+    expect(transposeSemitones(5, 5)).toBe(0); //  same tonic = identity
+  });
+
+  it("is a valid octave-representative of the raw upward rotation", () => {
+    for (let s = 0; s < 12; s++) {
+      for (let t = 0; t < 12; t++) {
+        const raw = (((t - s) % 12) + 12) % 12;
+        const near = transposeSemitones(s, t);
+        expect(((near % 12) + 12) % 12).toBe(raw); // same pitch class
+        expect(near).toBeGreaterThanOrEqual(-5);
+        expect(near).toBeLessThanOrEqual(6);
+      }
+    }
   });
 });
 

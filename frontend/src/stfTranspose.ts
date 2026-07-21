@@ -103,6 +103,21 @@ export function pitchClassName(pc: number): string {
   return SCALE_NAMES[(((pc % 12) + 12) % 12)]!;
 }
 
+/**
+ * The transposition interval from one tonic to another as a SIGNED semitone
+ * count in the range [-5, +6] — the octave-representative NEAREST zero. Using
+ * the smallest shift (instead of always rotating 0..11 upward) keeps the
+ * transposed melody in the register closest to the original: a down-a-4th key
+ * change reads as -5, not +7 up a 5th, so notes don't jump into a super-high
+ * octave (spurious double dots). A whole-octave manual nudge layers on top of
+ * this in the viewer; both are uniform shifts, so intervals and the exact
+ * round-trip guarantee are untouched.
+ */
+export function transposeSemitones(sourcePc: number, targetPc: number): number {
+  const k = (((targetPc - sourcePc) % 12) + 12) % 12; // 0..11 (upward)
+  return k > 6 ? k - 12 : k; // fold to [-5, +6]; tritone (6) stays +6
+}
+
 interface ParsedNote {
   letter: string;
   accidental: "" | "_" | "^";
