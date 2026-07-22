@@ -116,7 +116,13 @@ Rhythm and structure, transcribed inline in the note text:
   `-` (hold), or a `+` (rest). A slot BEFORE a note delays that note within the
   beat, so a curve may legitimately hold a single note: `(-G)` = the first half of
   the beat is silent/held and G lands on the half-beat. That is NOT the same as a
-  plain `G` — KEEP `(-G)` verbatim, never collapse it. But `(G-)` (note on the
+  plain `G` — KEEP `(-G)` verbatim, never collapse it. These leading-slot curves
+  are the EASIEST to miss: the arc is short and sits low under a dash-then-note, so
+  it reads like a plain hold. Whenever a hold `-` or rest `+` is joined to the
+  following note by one arc (the arc's left end starts under the `-`/`+`), wrap them
+  as a curve `(-G)` / `(+G)` — check every `-` or `+` that abuts a note for such an
+  arc. (Only when the arc is genuinely there; a standalone hold before a note with
+  no arc stays `- G`.) But `(G-)` (note on the
   beat, then held through it) equals a plain quarter note — write bare `G`. A curve
   over only holds/rests with NO note, e.g. `(--)`, is one sustained beat — collapse
   it to a single `-`. And a single note with NO slot — a bare `(S)`, or a
