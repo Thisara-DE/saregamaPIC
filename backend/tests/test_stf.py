@@ -35,6 +35,21 @@ def test_curve_group_must_span_two_slots():
     assert validate_stf(_sargam("(+G) R")) == []
 
 
+def _doc(*texts: str) -> dict:
+    return {"header": {}, "lines": [
+        {"n": i + 1, "kind": "sargam", "text": t} for i, t in enumerate(texts)
+    ]}
+
+
+def test_curveless_sheet_flagged_as_likely_dropped_run():
+    # 3+ sargam lines with no curve at all = the classic curve-dropping run.
+    warns = validate_stf(_doc("S R G M", "P D N S'", "R G M P"))
+    assert any("no curves found" in w for w in warns)
+    # A single curve anywhere clears it; so does a sheet below the line floor.
+    assert not any("no curves" in w for w in validate_stf(_doc("S R G M", "(PD) N", "R G M P")))
+    assert not any("no curves" in w for w in validate_stf(_doc("S R G M", "P D N S'")))
+
+
 def test_header_nine_semitone_cross_check():
     ok = {"header": {"concert_scale": "G", "alto_scale": "E"}, "lines": []}
     assert validate_stf(ok) == []

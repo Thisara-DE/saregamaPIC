@@ -55,8 +55,8 @@ def test_prepare_image_downscales_and_applies_exif():
     jpeg, media_type = prepare_image(_jpeg(4000, 2000, orientation=6))
     assert media_type == "image/jpeg"
     with Image.open(io.BytesIO(jpeg)) as im:
-        # orientation 6 rotates landscape → portrait; long edge capped at 2000
-        assert im.size == (1000, 2000)
+        # orientation 6 rotates landscape → portrait; long edge capped at 2600
+        assert im.size == (1300, 2600)
 
 
 def test_recognize_creates_draft_with_metrics(client):

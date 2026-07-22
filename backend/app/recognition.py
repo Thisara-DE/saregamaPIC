@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageOps
 
 # A recognizer maps (original image bytes, content-type) -> a draft result.
 Recognizer = Callable[[bytes, str], "RecognitionResult"]
@@ -36,23 +36,33 @@ class RecognitionUnavailable(RuntimeError):
     model response). The route turns this into a clean 503 rather than a 500."""
 
 
-# Long edge to downscale to before the vision call. High enough that the
-# dot-vs-dash (octave vs flat) distinction survives, low enough to bound cost.
-_MAX_EDGE = 2000
+# Long edge to downscale to before the vision call. Kept above the native long
+# edge of a typical scan so full-page sheets pass through without losing the
+# faint slur arcs; high enough that the dot-vs-dash (octave vs flat) distinction
+# survives, low enough to bound cost.
+_MAX_EDGE = 2600
 
 
 def prepare_image(data: bytes) -> tuple[bytes, str]:
-    """EXIF-correct + downscale a *copy* of the scan to a JPEG for the model.
+    """EXIF-correct + contrast-boost + downscale a *copy* of the scan for the model.
 
     Phone photos store rotation in EXIF with pixels unrotated; the vision model
     sees raw pixels, so orientation must be baked in here (same reason as the
-    thumbnail path). Returns (jpeg_bytes, media_type).
+    thumbnail path).
+
+    Faint pencil slur-arcs (curves) are the lightest strokes on the page and the
+    first thing lost to downscale + JPEG — a curve-dropping recognition run is the
+    classic failure. Flatten to grayscale (color carries no notation) and stretch
+    contrast at full resolution so those arcs and flat underlines darken *before*
+    the thumbnail averages them away. Returns (jpeg_bytes, media_type).
     """
     with Image.open(io.BytesIO(data)) as im:
-        im = ImageOps.exif_transpose(im)
+        im = ImageOps.exif_transpose(im).convert("L")
+        im = ImageOps.autocontrast(im, cutoff=1)
+        im = ImageEnhance.Contrast(im).enhance(1.4)
         im.thumbnail((_MAX_EDGE, _MAX_EDGE))
         out = io.BytesIO()
-        im.convert("RGB").save(out, "JPEG", quality=90)
+        im.convert("RGB").save(out, "JPEG", quality=95)
     return out.getvalue(), "image/jpeg"
 
 
@@ -91,13 +101,18 @@ Rhythm and structure, transcribed inline in the note text:
 - `+`  a one-beat REST (silence). Distinct from `-`.
 - `|`  a barline.
 - `//` repeat the section.
-- `( … )` a curve drawn under a group that shares one beat, e.g. (SRGM). It holds
-  two or more SLOTS — a slot is a note, a `-` (hold), or a `+` (rest). A slot BEFORE
-  a note delays that note within the beat, so a curve may legitimately hold a single
-  note: `(-G)` = the first half of the beat is silent/held and G lands on the
-  half-beat. That is NOT the same as a plain `G` — KEEP `(-G)` verbatim, never
-  collapse it. But `(G-)` (note on the beat, then held through it) equals a plain
-  quarter note — write bare `G`. And a single note with NO slot — a bare `(S)`, or a
+- `( … )` a curve drawn under a group that shares one beat, e.g. (SRGM). These
+  arcs are drawn in LIGHT pencil and are the faintest marks on the page — scan
+  every note group for a curve under it and transcribe EVERY curve you see; never
+  skip a group just because its arc is light. A whole sheet with no curves at all
+  is almost always a miss. A curve holds two or more SLOTS — a slot is a note, a
+  `-` (hold), or a `+` (rest). A slot BEFORE a note delays that note within the
+  beat, so a curve may legitimately hold a single note: `(-G)` = the first half of
+  the beat is silent/held and G lands on the half-beat. That is NOT the same as a
+  plain `G` — KEEP `(-G)` verbatim, never collapse it. But `(G-)` (note on the
+  beat, then held through it) equals a plain quarter note — write bare `G`. A curve
+  over only holds/rests with NO note, e.g. `(--)`, is one sustained beat — collapse
+  it to a single `-`. And a single note with NO slot — a bare `(S)`, or a
   flat-underline / octave-dot beneath ONE note — is an accidental/octave mark
   (encode R_ / S,) or a phantom curve, never a real curve: write the bare note.
 - `[ … ]` a passage for another instrument / decoration. Keep it as-is.

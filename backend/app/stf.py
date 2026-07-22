@@ -96,6 +96,11 @@ def _line_warnings(line_no: int, text: str) -> list[str]:
 # section, roadmap, annotation) are free text and pass through untouched.
 _NOTE_KINDS = {"sargam", "run"}
 
+# A sheet with at least this many barred `sargam` lines but zero curves is almost
+# certainly a curve-dropping recognition run (faint slur arcs are the easiest mark
+# to miss), so flag it. Below the floor a curveless sheet is plausible.
+_MIN_SARGAM_LINES_FOR_CURVE_CHECK = 3
+
 
 def validate_stf(stf: dict) -> list[str]:
     """Return advisory warnings for an STF document. Never raises on shape;
@@ -111,10 +116,24 @@ def validate_stf(stf: dict) -> list[str]:
             f"({header.get('concert_scale')} / {header.get('alto_scale')} are not)"
         )
 
+    sargam_lines = 0
+    curve_groups = 0
     for line in stf.get("lines") or []:
         if not isinstance(line, dict) or line.get("kind") not in _NOTE_KINDS:
             continue
         n = line.get("n")
-        warnings.extend(_line_warnings(n if isinstance(n, int) else 0, str(line.get("text", ""))))
+        text = str(line.get("text", ""))
+        if line.get("kind") == "sargam":
+            sargam_lines += 1
+        curve_groups += text.count("(")
+        warnings.extend(_line_warnings(n if isinstance(n, int) else 0, text))
+
+    # Curve-dropping run guard: faint slur arcs are the easiest mark to miss, and a
+    # whole sheet coming back with none is the classic failure mode. Advisory only.
+    if sargam_lines >= _MIN_SARGAM_LINES_FOR_CURVE_CHECK and curve_groups == 0:
+        warnings.append(
+            f"no curves found across {sargam_lines} sargam lines — verify the slur "
+            "arcs weren't missed (faint pencil curves are the easiest mark to drop)"
+        )
 
     return warnings
