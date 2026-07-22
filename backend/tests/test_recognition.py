@@ -91,6 +91,9 @@ def test_recognize_reruns_overwrite_draft_but_not_reviewed(client):
 
 def test_save_transcription_upserts_and_returns_warnings(client):
     _, scan_id = _scan(client)
+    # Start from a recognized draft so the save exercises the UPDATE path and
+    # must clear metrics that no longer describe the manually edited text.
+    assert client.post(f"/api/scans/{scan_id}/recognize").status_code == 201
     illegal = {"header": {}, "lines": [{"n": 1, "kind": "sargam", "text": "S_ P"}]}
     r = client.put(
         f"/api/scans/{scan_id}/transcription", json={"stf": illegal, "status": "draft"}
@@ -99,6 +102,8 @@ def test_save_transcription_upserts_and_returns_warnings(client):
     assert any("S and P never" in w for w in r.json()["warnings"])
     # manual save clears recognition metrics (they no longer describe the text)
     assert r.json()["model"] is None
+    assert r.json()["input_tokens"] is None
+    assert r.json()["output_tokens"] is None
 
 
 def test_transcription_404_before_recognition(client):

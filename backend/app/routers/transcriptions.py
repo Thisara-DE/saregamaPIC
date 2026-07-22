@@ -125,6 +125,7 @@ def save_transcription(scan_id: str, body: TranscriptionSave, request: Request) 
     else:
         conn.execute(
             "UPDATE transcriptions SET stf_json = ?, status = ?,"
+            " model = NULL, input_tokens = NULL, output_tokens = NULL,"
             " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE scan_id = ?",
             (stf_json, body.status, scan_id),
         )
