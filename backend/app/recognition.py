@@ -79,7 +79,14 @@ is on the paper, preserving its notation, punctuation, and line layout. You NEVE
 Notes are uppercase letters: S R G M P D N (never lowercase).
 - Plain letter = natural.
 - A dash UNDERNEATH a letter = flat. Only R, G, D, N are ever flat. Encode as a
-  trailing underscore: R_ G_ D_ N_.
+  trailing underscore: R_ G_ D_ N_. This flat dash is SHORT and FAINT — often the
+  lightest stroke on the note — and in these songs R and D are flatted VERY
+  frequently, so inspect directly beneath every R and every D specifically. Do not
+  read a note as natural just because its underline is light; only leave it natural
+  when there is genuinely no dash. A curve arc under a GROUP and a flat dash under
+  ONE letter live in the same space below the notes: after you identify a curve,
+  still check each letter inside it for its own separate flat underline — the curve
+  does not absorb them.
 - A dash/tick ON TOP of M = sharp. ONLY M is ever sharp. Encode as a trailing
   caret: M^.
 - S and P NEVER take any accidental. M is never flat. If a mark looks like it
