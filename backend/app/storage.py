@@ -2,7 +2,7 @@
 
 The uploaded photo is the source of truth for a scan and is NEVER modified
 (fidelity rule). Paths stored in the DB are relative to DATA_DIR so the
-whole data folder can be moved or restored from Dropbox as one unit.
+whole data folder can be moved or restored as one unit.
 
 Derived files (thumbnails, and later any display conversions) live under
 DATA_DIR/derived/ keyed by scan id. They are pure caches: safe to delete

@@ -3,7 +3,7 @@
 // standard v1.1); the Digital view (and, later, the Western view) are DERIVED by
 // rotating a copy of the text through this pure module.
 //
-// Semantics (vault decision 2026-07-17-notation-standard-v1, "Notation standard
+// Semantics (project notation standard v1.1,
 // v1.1"): each sargam letter is a fixed fingering name, i.e. a pitch class
 // measured in semitones from S. Transposing to a new scale rotates every note by
 // the interval between the source and target tonic and re-renders the letters —

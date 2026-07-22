@@ -1,7 +1,6 @@
 """SQLite access + tiny migration runner.
 
-Design choice (see vault decision 2026-07-17-phase-0-stack): plain sqlite3
-with versioned .sql files instead of an ORM. The whole schema is readable in
+Uses plain sqlite3 with versioned .sql files instead of an ORM. The whole schema is readable in
 app/migrations/, and adding a migration = adding NNN_name.sql. Applied
 versions are tracked in schema_migrations.
 

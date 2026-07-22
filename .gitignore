@@ -1,5 +1,4 @@
-# Runtime data — SQLite DB + uploaded scan images live here.
-# Gitignored, but the repo sits inside Dropbox so data/ is still backed up.
+# Runtime data: SQLite database and uploaded scan images.
 data/
 
 # Python
@@ -15,20 +14,33 @@ frontend/dist/
 frontend/dev-dist/
 *.tsbuildinfo
 
-# Local TLS certs for LAN HTTPS testing (never commit keys)
+# Local TLS certificates and secrets
 frontend/certs/
-
-# Secrets — Claude API key etc. NEVER commit.
 .env
 *.env.local
 
-# Editor / OS noise
+# Editor and operating-system files
 .vscode/
 .idea/
 Thumbs.db
 .DS_Store
 
-# Claude Code — keep all local tooling/context out of git
-# (still backed up via Dropbox; agent defs + CLAUDE.md excluded by choice)
-.claude/
-CLAUDE.md
+# Private AI/agent configuration and instructions: never publish.
+**/.agents/
+**/.claude/
+**/.codex/
+**/AGENTS.md
+**/CLAUDE.md
+
+# Private project memory, planning, and vault material. README.md is the public
+# repository's single project overview.
+docs/
+samples/
+memory/
+memories/
+.memory/
+.obsidian/
+*requirements*.md
+*technical-design*.md
+*implementation-plan*.md
+*session-log*.md

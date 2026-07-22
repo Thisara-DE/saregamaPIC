@@ -17,8 +17,8 @@ APP_VERSION = "0.1.0"
 
 @dataclass(frozen=True)
 class Settings:
-    # DATA_DIR holds the SQLite DB and the image store. Default <repo>/data:
-    # gitignored, but inside Dropbox so it is backed up for free.
+    # DATA_DIR holds the SQLite DB and image store. The default <repo>/data is
+    # gitignored; deployed environments mount persistent storage separately.
     data_dir: Path = field(default_factory=lambda: Path(
         os.environ.get("SAREGAMAPIC_DATA_DIR", str(REPO_ROOT / "data"))
     ))
@@ -26,7 +26,7 @@ class Settings:
     # LAN-only use. Set SAREGAMAPIC_API_TOKEN before exposing beyond the LAN.
     api_token: str = field(default_factory=lambda: os.environ.get("SAREGAMAPIC_API_TOKEN", ""))
     # Claude vision recognition (Phase 2). The key is read from the environment
-    # and NEVER committed or written to the vault. Empty = recognition returns a
+    # and never committed. Empty = recognition returns a
     # clean 503 until a key is exported.
     anthropic_api_key: str = field(
         default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
@@ -34,6 +34,11 @@ class Settings:
     recognition_model: str = field(
         default_factory=lambda: os.environ.get("SAREGAMAPIC_MODEL", "claude-opus-4-8")
     )
+    # Production containers set this to the compiled React directory. Empty in
+    # local Vite development and tests, where the frontend runs separately.
+    web_dir: Path | None = field(default_factory=lambda: (
+        Path(value) if (value := os.environ.get("SAREGAMAPIC_WEB_DIR", "")) else None
+    ))
 
     @property
     def db_path(self) -> Path:

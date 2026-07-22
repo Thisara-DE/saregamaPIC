@@ -4,8 +4,8 @@ import { PageViewer } from "./pages/PageViewer";
 import { SongPage } from "./pages/SongPage";
 import { SongsPage } from "./pages/SongsPage";
 
-// Routing arrived with Phase 1's third view (the page viewer), per the
-// convention in CLAUDE.md. The viewer renders outside the Shell so the
+// Routing arrived with Phase 1's third view (the page viewer). The viewer
+// renders outside the Shell so the
 // photo gets the whole screen.
 function Shell() {
   return (

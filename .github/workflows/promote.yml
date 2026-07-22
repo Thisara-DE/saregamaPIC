@@ -1,0 +1,77 @@
+name: Promote UAT and Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA already verified in Dev
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-promotion
+  cancel-in-progress: false
+
+jobs:
+  deploy-uat:
+    runs-on: ubuntu-latest
+    environment:
+      name: uat
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install --global @railway/cli
+      - name: Deploy verified commit to Railway UAT
+        run: >-
+          railway up --ci
+          --project "$RAILWAY_PROJECT_ID"
+          --service "$RAILWAY_SERVICE_ID"
+          --environment "$RAILWAY_ENVIRONMENT_ID"
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      - name: Verify UAT health
+        run: curl --fail --retry 8 --retry-delay 5 "${APP_URL%/}/api/health"
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+
+  deploy-production:
+    needs: deploy-uat
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install --global @railway/cli
+      - name: Deploy the same commit to Railway Production
+        run: >-
+          railway up --ci
+          --project "$RAILWAY_PROJECT_ID"
+          --service "$RAILWAY_SERVICE_ID"
+          --environment "$RAILWAY_ENVIRONMENT_ID"
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      - name: Verify Production health
+        run: curl --fail --retry 8 --retry-delay 5 "${APP_URL%/}/api/health"
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+

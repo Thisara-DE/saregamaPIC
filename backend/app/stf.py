@@ -1,7 +1,7 @@
 """Sargam Text Format (STF) — the canonical transcription store + validation.
 
 STF is the ASCII, diff-able, prompt-able encoding of a hand-written sheet,
-governed by notation standard v1.1 (vault decision 2026-07-17-notation-standard-v1).
+governed by the project's notation standard v1.1.
 A transcription's ``stf_json`` is ``{"header": {...}, "lines": [...]}``:
 
     header: {concert_scale, alto_scale, beat}   (empty strings when absent)

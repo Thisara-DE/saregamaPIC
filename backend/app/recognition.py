@@ -216,7 +216,7 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
 
         # This machine's network intercepts TLS; Python's bundled CA can't verify
         # api.anthropic.com. Use the Windows trust store instead — the Python
-        # counterpart of the `[tool.uv] system-certs = true` gotcha (see CLAUDE.md).
+        # counterpart of the `[tool.uv] system-certs = true` project setting.
         import truststore
 
         truststore.inject_into_ssl()

@@ -24,9 +24,9 @@ const httpsConfig =
     : undefined;
 
 export default defineConfig({
-  // The repo lives inside Dropbox; sync/file locks corrupt Vite's dep cache
-  // (EBUSY on the deps_temp -> deps rename), which serves broken modules and
-  // blank-screens the app. Keep the cache on the local disk, outside Dropbox.
+  // File-sync locks can corrupt Vite's dependency cache (EBUSY on the
+  // deps_temp -> deps rename) and serve broken modules. Keep the cache in the
+  // operating system's temporary directory.
   cacheDir: path.join(os.tmpdir(), "saregamapic-vite-cache"),
   plugins: [
     react(),

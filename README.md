@@ -136,6 +136,15 @@ requests to the backend on port 8000.
 For a second local instance, `SAREGAMAPIC_API_PORT` selects another backend port and
 `SAREGAMAPIC_NO_HTTPS=1` forces plain HTTP when local certificates exist.
 
+To verify the production-style container instead, start Docker Desktop and run:
+
+```powershell
+docker compose up --build
+```
+
+Open `http://localhost:8000`. GitHub Actions then handles the Railway Dev → UAT →
+Production workflow.
+
 ### Checks
 
 ```powershell

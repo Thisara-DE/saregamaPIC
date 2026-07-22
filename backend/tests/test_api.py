@@ -34,6 +34,21 @@ def test_health(client):
     assert r.json()["status"] == "ok"
 
 
+def test_compiled_frontend_and_spa_fallback(tmp_path):
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text("<h1>SaReGaMaPic</h1>", encoding="utf-8")
+    (web_dir / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    settings = Settings(data_dir=tmp_path / "data", web_dir=web_dir)
+
+    with TestClient(create_app(settings)) as c:
+        assert "SaReGaMaPic" in c.get("/").text
+        assert "SaReGaMaPic" in c.get("/songs/abc/pages/1").text
+        assert "javascript" in c.get("/app.js").headers["content-type"]
+        assert c.get("/missing.js").status_code == 404
+        assert c.get("/api/not-a-route").status_code == 404
+
+
 def test_song_crud_and_scan_roundtrip(client, settings):
     # create song
     r = client.post("/api/songs", json={"title": "Test Song", "notes": "from pytest"})
