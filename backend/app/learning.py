@@ -24,23 +24,23 @@ def _stf_tokens(stf: dict[str, Any]) -> list[str]:
     return tokens
 
 
-def _category(token: str) -> str:
-    if token.startswith("header:"):
+def _category(symbol: str) -> str:
+    if symbol.startswith("header:"):
         return "header"
-    if token.startswith("line:") or token == "<EOL>":
+    if symbol.startswith("line:") or symbol == "<EOL>":
         return "layout"
-    if token in {"(", ")"}:
+    if symbol in {"(", ")"}:
         return "curve"
-    if token in {"-", "+"}:
+    if symbol in {"-", "+"}:
         return "rhythm"
-    if token in {"|", "//"}:
+    if symbol in {"|", "//"}:
         return "barline"
-    if token in {"[", "]"}:
+    if symbol in {"[", "]"}:
         return "layout"
-    if NOTE_RE.fullmatch(token):
-        if "_" in token or "^" in token:
+    if NOTE_RE.fullmatch(symbol):
+        if "_" in symbol or "^" in symbol:
             return "accidental"
-        if "'" in token or "," in token:
+        if "'" in symbol or "," in symbol:
             return "octave"
         return "letter"
     return "layout"
@@ -100,4 +100,3 @@ def evaluation_metrics(
 
 def encode_summary(summary: dict[str, Any]) -> str:
     return json.dumps(summary, sort_keys=True, separators=(",", ":"))
-
