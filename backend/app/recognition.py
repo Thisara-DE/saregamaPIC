@@ -196,10 +196,15 @@ _USER_TEXT = (
     "exactly. Output only the JSON object."
 )
 
+# Structured outputs accept only a subset of JSON Schema: numeric constraints
+# (minimum/maximum/multipleOf) and string constraints (minLength/maxLength) are
+# rejected with a 400, which fails the whole recognition call before the image is
+# ever read. Enforce those bounds in Python instead — the song title is clamped
+# where it is stored. `_SCHEMA_UNSUPPORTED_KEYWORDS` guards this in tests.
 STF_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "song_title": {"type": "string", "maxLength": 200},
+        "song_title": {"type": "string"},
         "header": {
             "type": "object",
             "properties": {
@@ -215,7 +220,7 @@ STF_OUTPUT_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "n": {"type": "integer", "minimum": 1},
+                    "n": {"type": "integer"},
                     "kind": {
                         "type": "string",
                         "enum": [
@@ -237,6 +242,25 @@ STF_OUTPUT_SCHEMA = {
     "required": ["song_title", "header", "lines"],
     "additionalProperties": False,
 }
+
+# Keywords structured outputs reject. Adding one to STF_OUTPUT_SCHEMA breaks every
+# recognition call with a 400 before the model sees the image, so a test asserts
+# the schema stays clear of them.
+_SCHEMA_UNSUPPORTED_KEYWORDS = frozenset(
+    {
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
+)
 
 
 def _extract_json(text: str) -> dict:

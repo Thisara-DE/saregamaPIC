@@ -14,6 +14,8 @@ from PIL import Image
 from app.config import Settings
 from app.main import create_app
 from app.recognition import (
+    _SCHEMA_UNSUPPORTED_KEYWORDS,
+    STF_OUTPUT_SCHEMA,
     RecognitionResult,
     RecognitionUnavailable,
     make_recognizer,
@@ -66,6 +68,26 @@ def test_prepare_image_downscales_and_applies_exif():
     with Image.open(io.BytesIO(jpeg)) as im:
         # orientation 6 rotates landscape → portrait; long edge capped at 2600
         assert im.size == (1300, 2600)
+
+
+def test_output_schema_avoids_keywords_structured_outputs_rejects():
+    """Structured outputs accept only a subset of JSON Schema. A `minimum` on the
+    line number 400'd every recognition call before the image was read, and the
+    fake client in the test below cannot catch it — only the real API rejects it."""
+
+    def walk(node, path="schema"):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                assert key not in _SCHEMA_UNSUPPORTED_KEYWORDS, (
+                    f"{path}.{key} is rejected by structured outputs; "
+                    "enforce this bound in Python instead"
+                )
+                walk(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+
+    walk(STF_OUTPUT_SCHEMA)
 
 
 def test_production_recognizer_requests_structured_output_and_handles_truncation(
