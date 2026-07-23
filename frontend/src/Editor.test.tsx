@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { StfLineText, parseNote } from "./components/StfLineText";
+import { recognizeScan } from "./api/client";
 import type { SongDetail, Transcription } from "./api/types";
 
 const detail: SongDetail = {
@@ -96,6 +97,63 @@ describe("StfLineText", () => {
     const { container } = render(<StfLineText text="G (SR" />);
     expect(container.querySelector(".stf-curve")).toBeNull();
     expect(container.textContent).toContain("(");
+  });
+});
+
+describe("recognition network recovery", () => {
+  it("reuses the idempotency key and returns the completed draft after a dropped connection", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(transcription), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const onRecovering = vi.fn();
+
+    await expect(recognizeScan("scan1", onRecovering)).resolves.toEqual(transcription);
+
+    expect(onRecovering).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstHeaders = fetchMock.mock.calls[0]![1]?.headers as Record<string, string>;
+    const secondHeaders = fetchMock.mock.calls[1]![1]?.headers as Record<string, string>;
+    expect(secondHeaders["Idempotency-Key"]).toBe(firstHeaders["Idempotency-Key"]);
+  });
+
+  it("polls the same action when the backend is still finishing it", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: "Recognition with this Idempotency-Key is in progress",
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(transcription), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = recognizeScan("scan1");
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toEqual(transcription);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const keys = fetchMock.mock.calls.map(
+      (call) => (call[1]?.headers as Record<string, string>)["Idempotency-Key"],
+    );
+    expect(new Set(keys).size).toBe(1);
+    vi.useRealTimers();
   });
 });
 

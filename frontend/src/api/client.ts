@@ -91,11 +91,57 @@ export function getTranscription(scanId: string): Promise<Transcription> {
   return request<Transcription>(`/api/scans/${scanId}/transcription`);
 }
 
-export function recognizeScan(scanId: string): Promise<Transcription> {
-  return request<Transcription>(`/api/scans/${scanId}/recognize`, {
-    method: "POST",
-    headers: { "Idempotency-Key": crypto.randomUUID() },
-  });
+const RECOGNITION_RECOVERY_POLL_MS = 2_000;
+const RECOGNITION_RECOVERY_TIMEOUT_MS = 90_000;
+const RECOGNITION_IN_PROGRESS = "Recognition with this Idempotency-Key is in progress";
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/**
+ * Recognition can outlive an infrastructure request timeout. Replaying the
+ * same idempotency key is safe: the backend returns the completed draft
+ * without calling the model again, or reports that the original call is still
+ * running. Keep polling that action instead of showing a false network failure.
+ */
+export async function recognizeScan(
+  scanId: string,
+  onRecovering?: () => void,
+): Promise<Transcription> {
+  const idempotencyKey = crypto.randomUUID();
+  const path = `/api/scans/${scanId}/recognize`;
+  const startedAt = Date.now();
+  let recovering = false;
+
+  while (true) {
+    try {
+      return await request<Transcription>(path, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+      });
+    } catch (error) {
+      const stillRunning =
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === RECOGNITION_IN_PROGRESS;
+      const networkFailure = error instanceof TypeError;
+
+      if ((!networkFailure && !stillRunning) || Date.now() - startedAt >= RECOGNITION_RECOVERY_TIMEOUT_MS) {
+        throw error;
+      }
+      const retryImmediately = networkFailure && !recovering;
+      if (!recovering) {
+        recovering = true;
+        onRecovering?.();
+      }
+      // A network failure may occur just as the backend commits, so retry it
+      // immediately once. In-progress responses then settle into a quiet poll.
+      if (!retryImmediately) {
+        await delay(RECOGNITION_RECOVERY_POLL_MS);
+      }
+    }
+  }
 }
 
 export function saveTranscription(

@@ -52,6 +52,7 @@ export function EditorPage() {
   > | null>(null);
   const [hasTranscription, setHasTranscription] = useState(false);
   const [busy, setBusy] = useState<"load" | "recognize" | "save" | null>("load");
+  const [recognitionRecovering, setRecognitionRecovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The line whose mark bar is showing, and a handle on its focused <input> so
   // a bar tap can read/restore the caret without the input losing focus.
@@ -117,13 +118,15 @@ export function EditorPage() {
       return;
     }
     setBusy("recognize");
+    setRecognitionRecovering(false);
     setError(null);
     try {
-      apply(await recognizeScan(scanId));
+      apply(await recognizeScan(scanId, () => setRecognitionRecovering(true)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
+      setRecognitionRecovering(false);
     }
   }
 
@@ -196,6 +199,13 @@ export function EditorPage() {
       </div>
 
       {error && <p className="error editor-msg">{error}</p>}
+      {busy === "recognize" && (
+        <p className="muted editor-msg" role="status">
+          {recognitionRecovering
+            ? "The connection was interrupted. Checking for your completed digital draft…"
+            : "Creating the digital draft… This can take about a minute."}
+        </p>
+      )}
 
       <div className="editor-split">
         <div className="editor-photo">
