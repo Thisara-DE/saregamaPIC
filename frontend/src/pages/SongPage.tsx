@@ -49,10 +49,11 @@ export function SongPage() {
   async function handleDeleteSong() {
     if (!song) return;
     const pages = song.scans.length;
+    const displayTitle = song.title || "Untitled song";
     const warning =
       pages === 0
-        ? `Delete "${song.title}"?`
-        : `Delete "${song.title}" and its ${pages} ${pages === 1 ? "page" : "pages"}? ` +
+        ? `Delete "${displayTitle}"?`
+        : `Delete "${displayTitle}" and its ${pages} ${pages === 1 ? "page" : "pages"}? ` +
           "The original photos are removed too.";
     if (!window.confirm(warning)) return;
     try {
@@ -73,7 +74,7 @@ export function SongPage() {
           Delete song
         </button>
       </div>
-      <h2>{song?.title ?? "…"}</h2>
+      <h2>{song ? song.title || "Untitled song" : "…"}</h2>
 
       <div className="capture-actions">
         {/* capture="environment" → rear camera straight away on mobile */}

@@ -9,12 +9,19 @@ human-in-the-loop rules).
 
 import json
 import sqlite3
+import time
 import uuid
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from ..auth import current_user_id
-from ..recognition import RecognitionUnavailable, read_scan_bytes
+from ..learning import correction_summary, encode_summary
+from ..recognition import (
+    PREPROCESSING_VERSION,
+    PROMPT_VERSION,
+    RecognitionUnavailable,
+    read_scan_bytes,
+)
 from ..schemas import Transcription, TranscriptionSave
 from ..security import enforce_limit, reject_idempotency, security_event
 from ..stf import validate_stf
@@ -50,8 +57,17 @@ def _to_response(row: sqlite3.Row) -> Transcription:
 
 
 _SELECT = (
-    "SELECT id, scan_id, status, stf_json, model, input_tokens, output_tokens, updated_at"
+    "SELECT id, scan_id, status, stf_json, model, input_tokens, output_tokens,"
+    " recognition_run_id, current_revision_id, updated_at"
     " FROM transcriptions WHERE scan_id = ?"
+)
+
+_SELECT_RUN = (
+    "SELECT t.id, t.scan_id, 'draft' AS status, rr.raw_stf_json AS stf_json,"
+    " rr.model, rr.input_tokens, rr.output_tokens, rr.id AS recognition_run_id,"
+    " NULL AS current_revision_id, rr.created_at AS updated_at"
+    " FROM recognition_runs rr JOIN transcriptions t ON t.scan_id = rr.scan_id"
+    " WHERE rr.id = ? AND rr.scan_id = ? AND rr.outcome = 'succeeded'"
 )
 
 
@@ -90,7 +106,7 @@ def _recognize(
         if not 1 <= len(idempotency_key) <= 128 or not idempotency_key.isascii():
             raise HTTPException(status_code=400, detail="Invalid Idempotency-Key")
         prior = conn.execute(
-            "SELECT scan_id, status FROM recognition_idempotency"
+            "SELECT scan_id, status, recognition_run_id FROM recognition_idempotency"
             " WHERE user_id = ? AND idempotency_key = ?",
             (owner_id, idempotency_key),
         ).fetchone()
@@ -99,7 +115,9 @@ def _recognize(
                 reject_idempotency("Idempotency-Key was already used for another scan")
             if prior["status"] == "started":
                 reject_idempotency("Recognition with this Idempotency-Key is in progress")
-            completed = conn.execute(_SELECT, (scan_id,)).fetchone()
+            completed = conn.execute(
+                _SELECT_RUN, (prior["recognition_run_id"], scan_id)
+            ).fetchone()
             if completed is None:
                 reject_idempotency("Completed idempotent result is unavailable")
             return _to_response(completed)
@@ -146,42 +164,135 @@ def _recognize(
             reject_idempotency("Recognition with this Idempotency-Key is in progress")
 
     recognizer = request.app.state.recognizer
+    started = time.monotonic()
+    run_id = uuid.uuid4().hex
     try:
         result = recognizer(image, scan["content_type"])
     except RecognitionUnavailable as e:
+        conn.execute(
+            "INSERT INTO recognition_runs"
+            " (id, scan_id, user_id, preprocessing_version, prompt_version,"
+            " latency_ms, outcome, error_code)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'failed', 'recognition_unavailable')",
+            (
+                run_id,
+                scan_id,
+                owner_id,
+                PREPROCESSING_VERSION,
+                PROMPT_VERSION,
+                round((time.monotonic() - started) * 1000),
+            ),
+        )
         if idempotency_key is not None:
             conn.execute(
                 "DELETE FROM recognition_idempotency"
                 " WHERE user_id = ? AND idempotency_key = ?",
                 (owner_id, idempotency_key),
             )
-            conn.commit()
+        conn.commit()
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception:
+        conn.execute(
+            "INSERT INTO recognition_runs"
+            " (id, scan_id, user_id, preprocessing_version, prompt_version,"
+            " latency_ms, outcome, error_code)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'failed', 'internal_error')",
+            (
+                run_id,
+                scan_id,
+                owner_id,
+                PREPROCESSING_VERSION,
+                PROMPT_VERSION,
+                round((time.monotonic() - started) * 1000),
+            ),
+        )
+        if idempotency_key is not None:
+            conn.execute(
+                "DELETE FROM recognition_idempotency"
+                " WHERE user_id = ? AND idempotency_key = ?",
+                (owner_id, idempotency_key),
+            )
+        conn.commit()
+        raise
 
     stf_json = json.dumps(result.stf, ensure_ascii=False)
+    suggested_title = (result.suggested_title or "").strip()[:200]
+    conn.execute(
+        "INSERT INTO recognition_runs"
+        " (id, scan_id, user_id, preprocessing_version, prompt_version, model,"
+        " suggested_title, raw_stf_json, warnings_json, input_tokens, output_tokens,"
+        " latency_ms, outcome)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'succeeded')",
+        (
+            run_id,
+            scan_id,
+            owner_id,
+            PREPROCESSING_VERSION,
+            PROMPT_VERSION,
+            result.model,
+            suggested_title or None,
+            stf_json,
+            json.dumps(validate_stf(result.stf), ensure_ascii=False),
+            result.input_tokens,
+            result.output_tokens,
+            round((time.monotonic() - started) * 1000),
+        ),
+    )
+    if suggested_title:
+        conn.execute(
+            "UPDATE songs SET title = ? WHERE id = ? AND title = ''",
+            (suggested_title, scan["song_id"]),
+        )
     if existing is None:
+        transcription_id = uuid.uuid4().hex
         conn.execute(
             "INSERT INTO transcriptions"
-            " (id, scan_id, stf_json, status, model, input_tokens, output_tokens)"
-            " VALUES (?, ?, ?, 'draft', ?, ?, ?)",
-            (uuid.uuid4().hex, scan_id, stf_json, result.model,
-             result.input_tokens, result.output_tokens),
+            " (id, scan_id, stf_json, status, model, input_tokens, output_tokens,"
+            " recognition_run_id) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?)",
+            (
+                transcription_id,
+                scan_id,
+                stf_json,
+                result.model,
+                result.input_tokens,
+                result.output_tokens,
+                run_id,
+            ),
         )
     else:
+        transcription_id = existing["id"]
         conn.execute(
             "UPDATE transcriptions SET stf_json = ?, status = 'draft', model = ?,"
-            " input_tokens = ?, output_tokens = ?,"
+            " input_tokens = ?, output_tokens = ?, recognition_run_id = ?,"
             " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE scan_id = ?",
-            (stf_json, result.model, result.input_tokens, result.output_tokens, scan_id),
+            (
+                stf_json,
+                result.model,
+                result.input_tokens,
+                result.output_tokens,
+                run_id,
+                scan_id,
+            ),
         )
-    conn.commit()
+    revision_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO transcription_revisions"
+        " (id, transcription_id, recognition_run_id, stf_json, status, source)"
+        " VALUES (?, ?, ?, ?, 'draft', 'recognition')",
+        (revision_id, transcription_id, run_id, stf_json),
+    )
+    conn.execute(
+        "UPDATE transcriptions SET current_revision_id = ? WHERE id = ?",
+        (revision_id, transcription_id),
+    )
     if idempotency_key is not None:
         conn.execute(
-            "UPDATE recognition_idempotency SET status = 'completed'"
+            "UPDATE recognition_idempotency"
+            " SET status = 'completed', recognition_run_id = ?"
             " WHERE user_id = ? AND idempotency_key = ?",
-            (owner_id, idempotency_key),
+            (run_id, owner_id, idempotency_key),
         )
-        conn.commit()
+    conn.commit()
     security_event(
         request, "recognition", "succeeded", user_id=owner_id, resource_id=scan_id
     )
@@ -190,25 +301,55 @@ def _recognize(
 
 @router.put("/scans/{scan_id}/transcription", response_model=Transcription)
 def save_transcription(scan_id: str, body: TranscriptionSave, request: Request) -> Transcription:
-    """Save the reviewer's edited STF (draft or reviewed). Manual edits clear the
-    recognition cost metrics — they no longer describe the saved text."""
+    """Save the current STF view and append an immutable manual revision."""
     _scan_row(request, scan_id)
     conn: sqlite3.Connection = request.state.db
     stf_json = json.dumps(body.stf.model_dump(), ensure_ascii=False)
     existing = conn.execute(
-        "SELECT id FROM transcriptions WHERE scan_id = ?", (scan_id,)
+        "SELECT id, recognition_run_id FROM transcriptions WHERE scan_id = ?", (scan_id,)
     ).fetchone()
     if existing is None:
+        transcription_id = uuid.uuid4().hex
+        recognition_run_id = None
         conn.execute(
             "INSERT INTO transcriptions (id, scan_id, stf_json, status) VALUES (?, ?, ?, ?)",
-            (uuid.uuid4().hex, scan_id, stf_json, body.status),
+            (transcription_id, scan_id, stf_json, body.status),
         )
     else:
+        transcription_id = existing["id"]
+        recognition_run_id = existing["recognition_run_id"]
         conn.execute(
             "UPDATE transcriptions SET stf_json = ?, status = ?,"
-            " model = NULL, input_tokens = NULL, output_tokens = NULL,"
             " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE scan_id = ?",
             (stf_json, body.status, scan_id),
         )
+    summary_json = None
+    if recognition_run_id is not None:
+        run = conn.execute(
+            "SELECT raw_stf_json FROM recognition_runs WHERE id = ?",
+            (recognition_run_id,),
+        ).fetchone()
+        if run is not None and run["raw_stf_json"] is not None:
+            summary_json = encode_summary(
+                correction_summary(json.loads(run["raw_stf_json"]), body.stf.model_dump())
+            )
+    revision_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO transcription_revisions"
+        " (id, transcription_id, recognition_run_id, stf_json, status, source,"
+        " correction_summary_json) VALUES (?, ?, ?, ?, ?, 'manual', ?)",
+        (
+            revision_id,
+            transcription_id,
+            recognition_run_id,
+            stf_json,
+            body.status,
+            summary_json,
+        ),
+    )
+    conn.execute(
+        "UPDATE transcriptions SET current_revision_id = ? WHERE id = ?",
+        (revision_id, transcription_id),
+    )
     conn.commit()
     return _to_response(conn.execute(_SELECT, (scan_id,)).fetchone())

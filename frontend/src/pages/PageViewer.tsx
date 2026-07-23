@@ -126,7 +126,7 @@ export function PageViewer() {
           ✕
         </button>
         <span className="viewer-title">
-          {song ? `${song.title} — ${page} / ${scans.length}` : "…"}
+          {song ? `${song.title || "Untitled song"} — ${page} / ${scans.length}` : "…"}
         </span>
         {transcription && (
           <div className="view-toggle" role="group" aria-label="View">
@@ -259,7 +259,10 @@ export function PageViewer() {
 
       {scan && view === "original" && (
         <div className="viewer-stage">
-          <img src={scanImageUrl(scan.id)} alt={`Page ${page} of ${song?.title ?? ""}`} />
+          <img
+            src={scanImageUrl(scan.id)}
+            alt={`Page ${page} of ${song?.title || "Untitled song"}`}
+          />
         </div>
       )}
 

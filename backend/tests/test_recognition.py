@@ -2,6 +2,8 @@
 (never hits the network or needs an API key). Also covers image prep."""
 
 import io
+import json
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -76,6 +78,39 @@ def test_recognize_creates_draft_with_metrics(client):
     assert got.json()["stf"] == _DRAFT_STF
 
 
+def test_recognition_names_only_an_untitled_song(tmp_path):
+    def title_recognizer(_data, _content_type):
+        result = _fake_recognizer(_data, _content_type)
+        return RecognitionResult(
+            stf=result.stf,
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            suggested_title="  Tharuda Nidana Maha Re  ",
+        )
+
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings, recognizer=title_recognizer)) as c:
+        untitled = c.post(
+            "/api/songs/import",
+            files={"file": ("p.jpg", io.BytesIO(_jpeg(80, 60)), "image/jpeg")},
+        ).json()
+        c.post(f"/api/scans/{untitled['scan']['id']}/recognize")
+        assert c.get(f"/api/songs/{untitled['song']['id']}").json()["title"] == (
+            "Tharuda Nidana Maha Re"
+        )
+
+        named = c.post(
+            "/api/songs/import",
+            data={"title": "My chosen name"},
+            files={"file": ("p.jpg", io.BytesIO(_jpeg(80, 60)), "image/jpeg")},
+        ).json()
+        c.post(f"/api/scans/{named['scan']['id']}/recognize")
+        assert c.get(f"/api/songs/{named['song']['id']}").json()["title"] == (
+            "My chosen name"
+        )
+
+
 def test_recognition_idempotency_replays_without_second_model_call(tmp_path):
     calls = 0
 
@@ -100,6 +135,38 @@ def test_recognition_idempotency_replays_without_second_model_call(tmp_path):
     assert conflict.status_code == 409
 
 
+def test_old_idempotency_key_replays_its_original_run_after_rerun(tmp_path):
+    calls = 0
+
+    def changing_recognizer(_data, _content_type):
+        nonlocal calls
+        calls += 1
+        result = _fake_recognizer(_data, _content_type)
+        return RecognitionResult(
+            stf={**result.stf, "lines": [{**result.stf["lines"][0], "text": f"S {calls}"}]},
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings, recognizer=changing_recognizer)) as c:
+        _, scan_id = _scan(c)
+        first = c.post(
+            f"/api/scans/{scan_id}/recognize", headers={"Idempotency-Key": "first"}
+        )
+        second = c.post(
+            f"/api/scans/{scan_id}/recognize", headers={"Idempotency-Key": "second"}
+        )
+        replay = c.post(
+            f"/api/scans/{scan_id}/recognize", headers={"Idempotency-Key": "first"}
+        )
+    assert first.json()["stf"]["lines"][0]["text"] == "S 1"
+    assert second.json()["stf"]["lines"][0]["text"] == "S 2"
+    assert replay.json()["stf"]["lines"][0]["text"] == "S 1"
+    assert calls == 2
+
+
 def test_recognition_daily_quota(tmp_path):
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -116,11 +183,21 @@ def test_recognition_daily_quota(tmp_path):
     assert second.json()["detail"] == "Daily recognition quota reached"
 
 
-def test_recognize_reruns_overwrite_draft_but_not_reviewed(client):
+def test_recognize_reruns_preserve_runs_but_not_reviewed(client):
     _, scan_id = _scan(client)
     client.post(f"/api/scans/{scan_id}/recognize")
     # re-running on a draft is fine
     assert client.post(f"/api/scans/{scan_id}/recognize").status_code == 201
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM recognition_runs WHERE scan_id = ?", (scan_id,)
+        ).fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT count(*) FROM transcription_revisions tr"
+            " JOIN transcriptions t ON t.id = tr.transcription_id"
+            " WHERE t.scan_id = ? AND tr.source = 'recognition'",
+            (scan_id,),
+        ).fetchone()[0] == 2
     # mark reviewed, then re-recognize is refused
     client.put(
         f"/api/scans/{scan_id}/transcription",
@@ -140,10 +217,16 @@ def test_save_transcription_upserts_and_returns_warnings(client):
     )
     assert r.status_code == 200
     assert any("S and P never" in w for w in r.json()["warnings"])
-    # manual save clears recognition metrics (they no longer describe the text)
-    assert r.json()["model"] is None
-    assert r.json()["input_tokens"] is None
-    assert r.json()["output_tokens"] is None
+    # Recognition metrics continue to identify the raw run; the corrected text
+    # lives in a separate immutable revision with a privacy-safe diff summary.
+    assert r.json()["model"] == "fake-model"
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        summary = conn.execute(
+            "SELECT correction_summary_json FROM transcription_revisions"
+            " WHERE source = 'manual' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()[0]
+    assert json.loads(summary)["exact_token_match"] is False
+    assert json.loads(summary)["categories"]["accidental"] >= 1
 
 
 def test_transcription_404_before_recognition(client):
@@ -166,3 +249,8 @@ def test_recognition_unavailable_returns_503(tmp_path):
         r = c.post(f"/api/scans/{scan_id}/recognize")
         assert r.status_code == 503
         assert "ANTHROPIC_API_KEY" in r.json()["detail"]
+        with sqlite3.connect(settings.db_path) as conn:
+            run = conn.execute(
+                "SELECT outcome, error_code, raw_stf_json FROM recognition_runs"
+            ).fetchone()
+        assert run == ("failed", "recognition_unavailable", None)

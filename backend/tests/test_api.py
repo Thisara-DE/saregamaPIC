@@ -116,6 +116,39 @@ def test_song_crud_and_scan_roundtrip(client, settings):
     assert r.headers["content-type"] == "image/png"
 
 
+def test_upload_first_import_creates_song_and_first_scan_atomically(client, settings):
+    r = client.post(
+        "/api/songs/import",
+        data={"title": "  Optional title  "},
+        files={"file": ("page1.png", io.BytesIO(PNG_1PX), "image/png")},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["song"]["title"] == "Optional title"
+    assert body["song"]["scan_count"] == 1
+    assert body["scan"]["song_id"] == body["song"]["id"]
+    assert body["scan"]["page_no"] == 1
+    stored = settings.images_dir / body["song"]["id"] / f"{body['scan']['id']}.png"
+    assert stored.read_bytes() == PNG_1PX
+
+    untitled = client.post(
+        "/api/songs/import",
+        files={"file": ("page2.png", io.BytesIO(PNG_1PX), "image/png")},
+    )
+    assert untitled.status_code == 201
+    assert untitled.json()["song"]["title"] == ""
+
+
+def test_upload_first_import_does_not_create_song_for_invalid_image(client):
+    before = client.get("/api/songs").json()
+    r = client.post(
+        "/api/songs/import",
+        files={"file": ("bad.jpg", io.BytesIO(b"not an image"), "image/jpeg")},
+    )
+    assert r.status_code == 415
+    assert client.get("/api/songs").json() == before
+
+
 def test_upload_rejections(client):
     song_id = client.post("/api/songs", json={"title": "S"}).json()["id"]
     # wrong type

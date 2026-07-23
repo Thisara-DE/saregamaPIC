@@ -122,6 +122,8 @@ export function EditorPage() {
     setError(null);
     try {
       apply(await recognizeScan(scanId, () => setRecognitionRecovering(true)));
+      const refreshedSong = await getSong(songId);
+      setTitle(refreshedSong.title);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -186,7 +188,7 @@ export function EditorPage() {
           ✕
         </button>
         <span className="viewer-title">
-          {title ? `${title} — page ${page}` : "…"}
+          {`${title || "Untitled song"} — page ${page}`}
           {hasTranscription && <span className={`status-pill ${status}`}>{status}</span>}
         </span>
         <button
@@ -209,7 +211,12 @@ export function EditorPage() {
 
       <div className="editor-split">
         <div className="editor-photo">
-          {scanId && <img src={scanPreviewUrl(scanId)} alt={`Page ${page} of ${title}`} />}
+          {scanId && (
+            <img
+              src={scanPreviewUrl(scanId)}
+              alt={`Page ${page} of ${title || "Untitled song"}`}
+            />
+          )}
         </div>
 
         <div className="editor-form">

@@ -3,10 +3,10 @@
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Request, Response, UploadFile
 
 from ..auth import current_user_id
-from ..schemas import Scan, Song, SongCreate, SongDetail
+from ..schemas import Scan, Song, SongCreate, SongDetail, SongImport
 from ..security import enforce_limit, security_event
 from ..storage import (
     InvalidImage,
@@ -42,6 +42,44 @@ def _song_row(conn: sqlite3.Connection, song_id: str, owner_id: str) -> sqlite3.
     return row
 
 
+def _enforce_upload_limits(request: Request, owner_id: str) -> None:
+    settings = request.app.state.settings
+    enforce_limit(
+        request,
+        action="upload_rate",
+        subject=owner_id,
+        limit=settings.upload_limit_per_minute,
+        window_seconds=60,
+    )
+    enforce_limit(
+        request,
+        action="upload_quota",
+        subject=owner_id,
+        limit=settings.upload_quota_per_day,
+        window_seconds=86_400,
+        detail="Daily upload quota reached",
+    )
+
+
+async def _read_valid_upload(file: UploadFile) -> tuple[bytes, str]:
+    content_type = file.content_type or ""
+    if extension_for(content_type) is None:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported image type {content_type!r}; expected JPEG, PNG, or WebP",
+        )
+    data = await file.read()
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="Empty upload")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image larger than 30 MB")
+    try:
+        validate_scan_image(data, content_type)
+    except InvalidImage as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    return data, content_type
+
+
 @router.post("/songs", response_model=Song, status_code=201)
 def create_song(body: SongCreate, request: Request) -> Song:
     conn = _db(request)
@@ -53,6 +91,51 @@ def create_song(body: SongCreate, request: Request) -> Song:
     )
     conn.commit()
     return Song(**dict(_song_row(conn, song_id, owner_id)))
+
+
+@router.post("/songs/import", response_model=SongImport, status_code=201)
+async def import_song(
+    request: Request,
+    file: UploadFile,
+    title: str = Form(default="", max_length=200),
+) -> SongImport:
+    """Create a song and its first immutable scan as one upload-first action."""
+    conn = _db(request)
+    owner_id = current_user_id(request)
+    _enforce_upload_limits(request, owner_id)
+    data, content_type = await _read_valid_upload(file)
+    song_id = uuid.uuid4().hex
+    scan_id = uuid.uuid4().hex
+    clean_title = title.strip()
+    image_path = save_scan_image(
+        request.app.state.settings.images_dir, song_id, scan_id, content_type, data
+    )
+    try:
+        conn.execute(
+            "INSERT INTO songs (id, title, notes, owner_id) VALUES (?, ?, '', ?)",
+            (song_id, clean_title, owner_id),
+        )
+        conn.execute(
+            "INSERT INTO scans (id, song_id, page_no, image_path, content_type)"
+            " VALUES (?, ?, 1, ?, ?)",
+            (scan_id, song_id, image_path, content_type),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        delete_scan_files(request.app.state.settings.data_dir, image_path, scan_id)
+        raise
+    scan_row = conn.execute(
+        "SELECT id, song_id, page_no, content_type, uploaded_at FROM scans WHERE id = ?",
+        (scan_id,),
+    ).fetchone()
+    security_event(
+        request, "song_import", "succeeded", user_id=owner_id, resource_id=song_id
+    )
+    return SongImport(
+        song=Song(**dict(_song_row(conn, song_id, owner_id))),
+        scan=Scan(**dict(scan_row)),
+    )
 
 
 @router.get("/songs", response_model=list[Song])
@@ -107,38 +190,8 @@ async def upload_scan(song_id: str, file: UploadFile, request: Request) -> Scan:
     conn = _db(request)
     owner_id = current_user_id(request)
     _song_row(conn, song_id, owner_id)
-    settings = request.app.state.settings
-    enforce_limit(
-        request,
-        action="upload_rate",
-        subject=owner_id,
-        limit=settings.upload_limit_per_minute,
-        window_seconds=60,
-    )
-    enforce_limit(
-        request,
-        action="upload_quota",
-        subject=owner_id,
-        limit=settings.upload_quota_per_day,
-        window_seconds=86_400,
-        detail="Daily upload quota reached",
-    )
-
-    content_type = file.content_type or ""
-    if extension_for(content_type) is None:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported image type {content_type!r}; expected JPEG, PNG, or WebP",
-        )
-    data = await file.read()
-    if len(data) == 0:
-        raise HTTPException(status_code=400, detail="Empty upload")
-    if len(data) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail="Image larger than 30 MB")
-    try:
-        validate_scan_image(data, content_type)
-    except InvalidImage as exc:
-        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    _enforce_upload_limits(request, owner_id)
+    data, content_type = await _read_valid_upload(file)
 
     scan_id = uuid.uuid4().hex
     next_page = conn.execute(

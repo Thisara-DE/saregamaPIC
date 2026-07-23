@@ -29,6 +29,7 @@ class RecognitionResult:
     model: str
     input_tokens: int
     output_tokens: int
+    suggested_title: str | None = None
 
 
 class RecognitionUnavailable(RuntimeError):
@@ -41,6 +42,8 @@ class RecognitionUnavailable(RuntimeError):
 # faint slur arcs; high enough that the dot-vs-dash (octave vs flat) distinction
 # survives, low enough to bound cost.
 _MAX_EDGE = 2600
+PREPROCESSING_VERSION = "grayscale-autocontrast-2600-v1"
+PROMPT_VERSION = "stf-v1.1-2026-07-23"
 
 
 def prepare_image(data: bytes) -> tuple[bytes, str]:
@@ -139,6 +142,13 @@ quality may be present ("C minor", "D maj"). If the beat/time signature is absen
 leave beat empty (do not guess). A private scale/mode reminder in the top-right
 corner is NOT part of the copy — ignore it.
 
+## The song title
+
+If a song title is explicitly written as a heading at the top of the page, copy it
+verbatim into the top-level `song_title` field. Do not infer a title from lyrics,
+annotations, filenames, musical content, or outside knowledge. If no clear title is
+written at the top, return an empty string.
+
 ## Line kinds
 
 Each line of the sheet becomes one STF line object with a `kind`:
@@ -165,6 +175,7 @@ Each line of the sheet becomes one STF line object with a `kind`:
 ## Output format (exact JSON)
 
 {
+  "song_title": "Written title, or empty",
   "header": {"concert_scale": "G", "alto_scale": "E", "beat": "4/4"},
   "lines": [
     {"n": 1, "kind": "section", "text": "Intro"},
@@ -252,14 +263,16 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
 
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         try:
-            stf = _extract_json(text)
+            payload = _extract_json(text)
         except json.JSONDecodeError as e:
             raise RecognitionUnavailable("model did not return valid STF JSON") from e
+        suggested_title = payload.pop("song_title", "")
         return RecognitionResult(
-            stf=stf,
+            stf=payload,
             model=resp.model,
             input_tokens=resp.usage.input_tokens,
             output_tokens=resp.usage.output_tokens,
+            suggested_title=suggested_title if isinstance(suggested_title, str) else None,
         )
 
     return recognize

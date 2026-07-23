@@ -31,6 +31,11 @@ class SongDetail(Song):
     scans: list[Scan] = []
 
 
+class SongImport(BaseModel):
+    song: Song
+    scan: Scan
+
+
 class Health(BaseModel):
     status: str
     version: str

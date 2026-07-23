@@ -7,6 +7,7 @@ import type {
   Scan,
   Song,
   SongDetail,
+  SongImport,
   Stf,
   Transcription,
   TranscriptionStatus,
@@ -65,6 +66,16 @@ export function createSong(title: string, notes = ""): Promise<Song> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, notes }),
+  });
+}
+
+export function importSong(file: File, title = ""): Promise<SongImport> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("title", title);
+  return request<SongImport>("/api/songs/import", {
+    method: "POST",
+    body: form,
   });
 }
 

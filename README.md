@@ -24,11 +24,13 @@ new arrangement or an attempt to “improve” the music.
 
 ## How it works
 
-1. Create a song in the gallery.
-2. Photograph a handwritten sheet with a phone or tablet, or upload an existing
-   image. Multi-page songs stay grouped together.
-3. Ask the app to recognize the handwriting and create a digital sargam draft.
-4. Review the draft beside the photograph and correct anything the recognition
+1. Photograph a handwritten sheet with a phone or tablet, or choose an existing
+   image.
+2. Optionally name the song. If left untitled, recognition can copy a clearly
+   written title from the top of the sheet.
+3. Add the sheet and continue directly to recognition. Additional pages can be
+   uploaded later and stay grouped with the song.
+4. Review the digital sargam draft beside the photograph and correct anything recognition
    missed.
 5. Save the reviewed version and switch between the original photograph and the
    digital copy whenever you play.
@@ -72,9 +74,11 @@ replace the reviewed copy.
 ## Project status
 
 SaReGaMaPic has completed **Phase 3**: capture, gallery, recognition, correction,
-digital viewing, and sargam transposition are built and working. **Phase 3.4 is in
-progress**: Google login, server-side sessions, and per-user ownership isolation are
-built; deployment configuration and the remaining security release checks are next.
+digital viewing, and sargam transposition are built and working. **Phase 3.4 is
+complete**: Google login, revocable server-side sessions, per-user ownership
+isolation, abuse controls, and the security release gates are built and verified.
+**Phase 3.5 is in progress**: immutable recognition runs, corrected revisions, and
+private evaluation metrics form the recognition-learning foundation.
 
 **Phase 4 — Western notation** will add a third viewer mode that converts reviewed
 sargam into readable Western staff notation and follows the same key selector. Before
@@ -88,9 +92,9 @@ on the tablet is faster than retyping it.
 
 ## Scope and privacy
 
-This is currently a single-user personal app. It does not include accounts, public
-sharing, social features, audio playback, or MIDI. Original sheets and reviewed
-transcriptions stay in the owner's local app storage;
+This is currently an invite-only personal app. It does not include public sharing,
+social features, audio playback, or MIDI. Original sheets and reviewed
+transcriptions stay isolated in each owner's app storage;
 recognition sends the prepared page image to the configured vision service only when
 the user chooses **Recognize**.
 
@@ -171,6 +175,21 @@ never commit them or place them in the project vault.
 cd backend;  uv run pytest;  uv run ruff check .
 cd frontend; npm test;       npm run lint;      npm run build
 ```
+
+### Recognition baseline
+
+After migration 005, every new recognition attempt and manual correction is retained.
+To print aggregate metrics for reviewed raw/corrected pairs without displaying STF or
+images:
+
+```powershell
+cd backend
+uv run python -m scripts.evaluate_recognition
+```
+
+Passing `--replay --model <model-id>` evaluates a candidate model/prompt against the
+private reviewed scans. Replay invokes the configured recognition API and incurs API
+cost, so run it deliberately.
 
 ### Install and test on a phone or tablet
 

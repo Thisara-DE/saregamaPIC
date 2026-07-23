@@ -24,6 +24,11 @@ export interface SongDetail extends Song {
   scans: Scan[];
 }
 
+export interface SongImport {
+  song: Song;
+  scan: Scan;
+}
+
 export interface Health {
   status: string;
   version: string;

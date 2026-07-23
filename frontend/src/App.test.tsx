@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -65,6 +65,14 @@ function renderAt(path: string) {
 describe("App", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:sheet-preview"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
   });
 
   it("lists songs with cover thumbnails in the gallery", async () => {
@@ -79,6 +87,53 @@ describe("App", () => {
       "href",
       "/songs/abc123",
     );
+  });
+
+  it("starts a new song with an image and an optional title", async () => {
+    const imported = {
+      song: { ...song, id: "new-song", title: "", scan_count: 1, cover_scan_id: "new-scan" },
+      scan: { ...detail.scans[0], id: "new-scan", song_id: "new-song", page_no: 1 },
+    };
+    let importBody: FormData | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") return Promise.resolve(Response.json(authUser));
+        if (url === "/api/songs/import") {
+          importBody = init?.body as FormData;
+          return Promise.resolve(Response.json(imported, { status: 201 }));
+        }
+        if (url === "/api/songs/new-song") {
+          return Promise.resolve(Response.json({ ...imported.song, scans: [imported.scan] }));
+        }
+        if (url === "/api/scans/new-scan/transcription") {
+          return Promise.resolve(Response.json({ detail: "Not found" }, { status: 404 }));
+        }
+        return Promise.resolve(Response.json(songs));
+      }),
+    );
+    renderAt("/");
+    await screen.findByRole("button", { name: "Choose image…" });
+
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const file = new File(["sheet"], "sheet.jpg", { type: "image/jpeg" });
+    const browseInput = inputs[1];
+    expect(browseInput).toBeDefined();
+    fireEvent.change(browseInput!, { target: { files: [file] } });
+    expect(await screen.findByRole("img", { name: "Selected sheet preview" })).toHaveAttribute(
+      "src",
+      "blob:sheet-preview",
+    );
+    fireEvent.change(screen.getByLabelText(/Song name/), {
+      target: { value: "My optional name" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add song" }));
+
+    await waitFor(() => expect(importBody).toBeDefined());
+    expect(importBody?.get("file")).toBe(file);
+    expect(importBody?.get("title")).toBe("My optional name");
+    await screen.findByText("Untitled song — page 1");
   });
 
   it("song page shows thumbnails linking to the page viewer", async () => {
