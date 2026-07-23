@@ -27,7 +27,7 @@ from .auth import (
 )
 from .config import APP_VERSION, Settings
 from .recognition import Recognizer, make_recognizer
-from .routers import scans, songs, transcriptions
+from .routers import learning, scans, songs, transcriptions
 from .schemas import Health
 
 
@@ -160,6 +160,7 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     app.include_router(songs.router, prefix="/api")
     app.include_router(scans.router, prefix="/api")
     app.include_router(transcriptions.router, prefix="/api")
+    app.include_router(learning.router, prefix="/api")
 
     # The deployed Docker image is a single same-origin service. Local development
     # leaves web_dir unset and continues to use Vite's dev server and /api proxy.

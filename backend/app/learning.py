@@ -3,7 +3,9 @@
 import json
 import re
 from collections import Counter
+from collections.abc import Iterable
 from difflib import SequenceMatcher
+from statistics import mean
 from typing import Any
 
 NOTE_RE = re.compile(r"[SRGMPDN](?:['_^,]*)")
@@ -145,6 +147,64 @@ def evaluation_metrics(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "latency_ms": latency_ms,
+    }
+
+
+BASELINE_SHEET_TARGET = 5
+
+
+def _mean(values: Iterable[float]) -> float | None:
+    collected = list(values)
+    return mean(collected) if collected else None
+
+
+def baseline_report(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate per-sheet metrics into the recognition baseline report.
+
+    Shared by the CLI and the API so a locally-run report and a deployed one can
+    never disagree. Aggregates only — never STF text, token text, or images.
+    """
+    category_totals: Counter[str] = Counter()
+    for item in results:
+        category_totals.update(item["categories"])
+    total_corrections = sum(category_totals.values())
+    corrected_tokens = sum(item["corrected_token_count"] for item in results)
+    return {
+        "reviewed_sheet_count": len(results),
+        "baseline_ready": len(results) >= BASELINE_SHEET_TARGET,
+        "sheets_needed": max(0, BASELINE_SHEET_TARGET - len(results)),
+        "exact_sheet_matches": sum(item["exact_token_match"] for item in results),
+        "mean_token_accuracy": _mean(item["exact_token_accuracy"] for item in results),
+        "mean_line_accuracy": _mean(item["line_accuracy"] for item in results),
+        # Worst symbol class first — this is what a targeted prompt fix aims at.
+        "corrections_by_symbol": [
+            {
+                "category": category,
+                "corrected_tokens": count,
+                "share_of_all_corrections": round(count / total_corrections, 4),
+                "per_1000_tokens": round(1000 * count / corrected_tokens, 2)
+                if corrected_tokens
+                else None,
+                "sheets_affected": sum(1 for item in results if item["categories"].get(category)),
+            }
+            for category, count in category_totals.most_common()
+        ],
+        # Per sheet too, so one bad scan cannot hide behind the mean.
+        "per_sheet": [
+            {
+                "sheet": index,
+                "token_accuracy": round(item["exact_token_accuracy"], 4),
+                "line_accuracy": round(item["line_accuracy"], 4),
+                "changed_tokens": item["changed_token_count"],
+                "categories": item["categories"],
+            }
+            for index, item in enumerate(results, start=1)
+        ],
+        "total_input_tokens": sum(item["input_tokens"] or 0 for item in results),
+        "total_output_tokens": sum(item["output_tokens"] or 0 for item in results),
+        "mean_latency_ms": _mean(
+            item["latency_ms"] for item in results if item["latency_ms"] is not None
+        ),
     }
 
 

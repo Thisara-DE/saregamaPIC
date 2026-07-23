@@ -14,6 +14,7 @@ from app import db
 from app.auth import INITIAL_OWNER_ID, SESSION_COOKIE, create_session
 from app.config import Settings
 from app.main import create_app
+from app.recognition import RecognitionResult
 
 
 def _valid_png() -> bytes:
@@ -299,3 +300,45 @@ def test_two_users_cannot_discover_or_access_each_others_resources(
     _as(auth_client, token_a)
     assert auth_client.get(f"/api/songs/{song['id']}").status_code == 200
     assert auth_client.get(f"/api/scans/{scan['id']}/image").status_code == 200
+
+
+def test_recognition_baseline_is_scoped_to_its_owner(auth_settings):
+    """One user's recognition baseline must never include another user's sheets,
+    and must not be readable without a session."""
+    stf = {
+        "header": {"concert_scale": "G", "alto_scale": "E", "beat": "4/4"},
+        "lines": [{"n": 1, "kind": "sargam", "text": "S R G | P"}],
+    }
+
+    def fake_recognizer(_data, _content_type):
+        return RecognitionResult(
+            stf=stf, model="fake-model", input_tokens=10, output_tokens=5
+        )
+
+    app = create_app(auth_settings, recognizer=fake_recognizer)
+    with TestClient(app, base_url=ORIGIN) as client:
+        assert client.get("/api/recognition/baseline").status_code == 401
+
+        owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+        _as(client, _session(auth_settings, owner_id))
+        song = _post(client, "/api/songs", json={"title": "Owned"}).json()
+        scan = _post(
+            client,
+            f"/api/songs/{song['id']}/scans",
+            files={"file": ("p.png", io.BytesIO(PNG_1PX), "image/png")},
+        ).json()
+        _post(client, f"/api/scans/{scan['id']}/recognize")
+        corrected = {**stf, "lines": [{"n": 1, "kind": "sargam", "text": "S R_ G | P"}]}
+        client.put(
+            f"/api/scans/{scan['id']}/transcription",
+            headers={"Origin": ORIGIN},
+            json={"stf": corrected, "status": "reviewed"},
+        )
+        assert client.get("/api/recognition/baseline").json()["reviewed_sheet_count"] == 1
+
+        stranger_id = _activate_user(auth_settings, "stranger@example.com")
+        _as(client, _session(auth_settings, stranger_id))
+        stranger = client.get("/api/recognition/baseline").json()
+        assert stranger["reviewed_sheet_count"] == 0
+        assert stranger["corrections_by_symbol"] == []
+        assert stranger["per_sheet"] == []

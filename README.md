@@ -191,6 +191,17 @@ cd backend
 uv run python -m scripts.evaluate_recognition
 ```
 
+On a deployed environment the database lives on the service's `/data` volume and the
+image ships `app/` but not `scripts/`, so the CLI cannot reach it. Read the same report
+over the API instead — open it in a browser where you are already signed in:
+
+```
+GET /api/recognition/baseline
+```
+
+It is session-authenticated and scoped to the signed-in user's own sheets, and returns
+the identical aggregate structure (both call one shared `baseline_report`).
+
 The report ranks `corrections_by_symbol` worst-first — which symbol class (curve,
 accidental, octave, barline, letter, `alien_letter`, rhythm, header, layout) actually
 costs the most corrections — and breaks the same counts down `per_sheet` so a single

@@ -187,6 +187,37 @@ def test_recognition_idempotency_replays_without_second_model_call(tmp_path):
     assert conflict.status_code == 409
 
 
+def test_baseline_endpoint_counts_reviewed_pairs_and_ranks_symbols(client):
+    """The deployed image ships app/ but not scripts/, so the baseline has to be
+    readable over the API to be usable on Railway at all."""
+    empty = client.get("/api/recognition/baseline").json()
+    assert empty["reviewed_sheet_count"] == 0
+    assert empty["baseline_ready"] is False
+    assert empty["sheets_needed"] == 5
+    assert empty["mean_token_accuracy"] is None
+
+    _, scan_id = _scan(client)
+    client.post(f"/api/scans/{scan_id}/recognize")
+    corrected = {
+        **_DRAFT_STF,
+        "lines": [{"n": 1, "kind": "sargam", "text": "S R_ - G | P D N S'"}],
+    }
+    saved = client.put(
+        f"/api/scans/{scan_id}/transcription",
+        json={"stf": corrected, "status": "reviewed"},
+    )
+    assert saved.status_code == 200
+
+    report = client.get("/api/recognition/baseline").json()
+    assert report["reviewed_sheet_count"] == 1
+    assert report["sheets_needed"] == 4
+    assert report["baseline_ready"] is False
+    assert report["corrections_by_symbol"][0]["category"] == "accidental"
+    assert report["per_sheet"][0]["categories"] == {"accidental": 1}
+    # Aggregates only: no STF or token text may reach the response.
+    assert "S R" not in json.dumps(report)
+
+
 def test_recognition_stamps_run_and_transcription_with_one_timestamp(client, tmp_path):
     """The original response reads `transcriptions.updated_at`, a replay reads
     `recognition_runs.created_at`. Separate clock reads made the two bodies
