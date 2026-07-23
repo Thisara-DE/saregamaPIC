@@ -2,6 +2,7 @@
 // server proxies them to FastAPI, so no CORS and no base-URL configuration.
 
 import type {
+  AuthUser,
   Health,
   Scan,
   Song,
@@ -41,6 +42,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getHealth(): Promise<Health> {
   return request<Health>("/api/health");
+}
+
+export function getCurrentUser(): Promise<AuthUser> {
+  return request<AuthUser>("/api/auth/me");
+}
+
+export function logout(): Promise<void> {
+  return request<void>("/api/auth/logout", { method: "POST" });
 }
 
 export function listSongs(): Promise<Song[]> {

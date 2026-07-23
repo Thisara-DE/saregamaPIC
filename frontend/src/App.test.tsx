@@ -2,7 +2,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { Song, SongDetail } from "./api/types";
+import type { AuthUser, Song, SongDetail } from "./api/types";
+
+const authUser: AuthUser = {
+  id: "user1",
+  email: "thisara@example.com",
+  display_name: "Thisara",
+};
 
 const song: Song = {
   id: "abc123",
@@ -36,12 +42,16 @@ const detail: SongDetail = {
 };
 
 function mockFetchJson(body: unknown) {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
-  );
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const responseBody = url === "/api/auth/me" ? authUser : body;
+    return Promise.resolve(
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
 }
 
 function renderAt(path: string) {
@@ -60,8 +70,8 @@ describe("App", () => {
   it("lists songs with cover thumbnails in the gallery", async () => {
     vi.stubGlobal("fetch", mockFetchJson(songs));
     renderAt("/");
-    expect(screen.getByText("SaReGaMaPic")).toBeInTheDocument();
     await waitFor(() => {
+      expect(screen.getByText("SaReGaMaPic")).toBeInTheDocument();
       expect(screen.getByText("Test Sinhala Song")).toBeInTheDocument();
     });
     expect(screen.getByText("2 pages")).toBeInTheDocument();
@@ -101,13 +111,34 @@ describe("App", () => {
   it("shows API errors instead of crashing", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ detail: "boom" }), { status: 500 }),
-      ),
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") {
+          return Promise.resolve(Response.json(authUser));
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "boom" }), { status: 500 }),
+        );
+      }),
     );
     renderAt("/");
     await waitFor(() => {
       expect(screen.getByText("boom")).toBeInTheDocument();
     });
+  });
+
+  it("offers Google login when the session is missing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "Unauthorized" }), { status: 401 }),
+      ),
+    );
+    renderAt("/songs/abc123");
+    const login = await screen.findByRole("link", { name: "Continue with Google" });
+    expect(login).toHaveAttribute(
+      "href",
+      "/api/auth/login?return_to=%2Fsongs%2Fabc123",
+    );
   });
 });

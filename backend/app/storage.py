@@ -10,6 +10,8 @@ wholesale, regenerated on demand from the originals.
 """
 
 import contextlib
+import io
+import warnings
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -21,12 +23,75 @@ CONTENT_TYPE_EXT = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
-    "image/heic": ".heic",
 }
+CONTENT_TYPE_FORMAT = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/webp": "WEBP",
+}
+
+MAX_IMAGE_SIDE = 16_000
+MAX_IMAGE_PIXELS = 60_000_000
+_PNG_END = bytes.fromhex("0000000049454e44ae426082")
+
+
+class InvalidImage(ValueError):
+    """The upload is not a safe, fully decodable image of its declared type."""
 
 
 def extension_for(content_type: str) -> str | None:
     return CONTENT_TYPE_EXT.get(content_type)
+
+
+def _container_is_exact(data: bytes, content_type: str) -> bool:
+    """Reject obvious MIME spoofing and bytes appended after the image container."""
+    if content_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9")
+    if content_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n") and data.endswith(_PNG_END)
+    if content_type == "image/webp":
+        return (
+            len(data) >= 12
+            and data[:4] == b"RIFF"
+            and data[8:12] == b"WEBP"
+            and int.from_bytes(data[4:8], "little") + 8 == len(data)
+        )
+    return False
+
+
+def validate_scan_image(data: bytes, content_type: str) -> None:
+    """Fully verify an upload without rewriting the immutable original."""
+    expected_format = CONTENT_TYPE_FORMAT.get(content_type)
+    if expected_format is None or not _container_is_exact(data, content_type):
+        raise InvalidImage("Image bytes do not match the declared type")
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format != expected_format:
+                    raise InvalidImage("Decoded image does not match the declared type")
+                width, height = image.size
+                if (
+                    width < 1
+                    or height < 1
+                    or width > MAX_IMAGE_SIDE
+                    or height > MAX_IMAGE_SIDE
+                    or width * height > MAX_IMAGE_PIXELS
+                ):
+                    raise InvalidImage("Image dimensions exceed the safe limit")
+                image.verify()
+    except InvalidImage:
+        raise
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        ValueError,
+    ) as exc:
+        raise InvalidImage("Image cannot be safely decoded") from exc
 
 
 def save_scan_image(

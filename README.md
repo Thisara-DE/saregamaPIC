@@ -72,12 +72,14 @@ replace the reviewed copy.
 ## Project status
 
 SaReGaMaPic has completed **Phase 3**: capture, gallery, recognition, correction,
-digital viewing, and sargam transposition are built and working.
+digital viewing, and sargam transposition are built and working. **Phase 3.4 is in
+progress**: Google login, server-side sessions, and per-user ownership isolation are
+built; deployment configuration and the remaining security release checks are next.
 
-The next milestone is **Phase 4 — Western notation**. It will add a third viewer mode
-that converts reviewed sargam into readable Western staff notation and follows the
-same key selector. Before that view is finalized, the remaining musical choices—such
-as Concert versus Alto written pitch and how special rhythm markings should appear on
+**Phase 4 — Western notation** will add a third viewer mode that converts reviewed
+sargam into readable Western staff notation and follows the same key selector. Before
+that view is finalized, the remaining musical choices—such as Concert versus Alto
+written pitch and how special rhythm markings should appear on
 a staff—will be agreed with the musician.
 
 Two practical recognition checks are still in progress: confirming the latest
@@ -144,6 +146,24 @@ docker compose up --build
 
 Open `http://localhost:8000`. GitHub Actions then handles the Railway Dev → UAT →
 Production workflow.
+
+### Authentication
+
+Local development leaves authentication disabled. A remotely exposed environment
+must configure all of the following:
+
+```text
+SAREGAMAPIC_AUTH_ENABLED=true
+SAREGAMAPIC_APP_BASE_URL=https://your-app-domain
+SAREGAMAPIC_INITIAL_OWNER_EMAIL=your-google-account@example.com
+SAREGAMAPIC_OAUTH_STATE_SECRET=<random 64-byte secret>
+GOOGLE_OAUTH_CLIENT_ID=<Google web OAuth client ID>
+GOOGLE_OAUTH_CLIENT_SECRET=<Google web OAuth client secret>
+```
+
+Register `<SAREGAMAPIC_APP_BASE_URL>/api/auth/callback` as the Google OAuth
+client's authorized redirect URI. Secrets belong only in the runtime environment;
+never commit them or place them in the project vault.
 
 ### Checks
 

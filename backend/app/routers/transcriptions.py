@@ -13,6 +13,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ..auth import current_user_id
 from ..recognition import RecognitionUnavailable, read_scan_bytes
 from ..schemas import Transcription, TranscriptionSave
 from ..stf import validate_stf
@@ -22,7 +23,10 @@ router = APIRouter()
 
 def _scan_row(request: Request, scan_id: str) -> sqlite3.Row:
     row = request.state.db.execute(
-        "SELECT id, song_id, image_path, content_type FROM scans WHERE id = ?", (scan_id,)
+        "SELECT sc.id, sc.song_id, sc.image_path, sc.content_type"
+        " FROM scans sc JOIN songs so ON so.id = sc.song_id"
+        " WHERE sc.id = ? AND so.owner_id = ?",
+        (scan_id, current_user_id(request)),
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Scan not found")

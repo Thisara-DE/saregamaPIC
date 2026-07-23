@@ -10,11 +10,14 @@ from app.config import Settings
 from app.main import create_app
 from app.storage import preview_path, thumbnail_path
 
-# 1x1 PNG (smallest valid image payload)
-PNG_1PX = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-    "0000000d49444154789c626001000000ffff03000006000557bfabd40000000049454e44ae426082"
-)
+
+def _valid_png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGBA", (1, 1), "white").save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+PNG_1PX = _valid_png()
 
 
 @pytest.fixture
@@ -32,6 +35,26 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert "strict-transport-security" not in r.headers
+
+
+def test_https_security_headers(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data", app_base_url="https://app.example.test"
+    )
+    with TestClient(create_app(settings), base_url="https://app.example.test") as c:
+        r = c.get("/api/health")
+    assert r.headers["strict-transport-security"] == (
+        "max-age=31536000; includeSubDomains"
+    )
+    assert "upgrade-insecure-requests" in r.headers["content-security-policy"]
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["permissions-policy"] == (
+        "camera=(self), geolocation=(), microphone=()"
+    )
 
 
 def test_compiled_frontend_and_spa_fallback(tmp_path):
@@ -111,6 +134,38 @@ def test_upload_rejections(client):
         files={"file": ("p.png", io.BytesIO(PNG_1PX), "image/png")},
     )
     assert r.status_code == 404
+
+
+def test_upload_rejects_spoofed_malformed_and_polyglot_images(client, settings):
+    song_id = client.post("/api/songs", json={"title": "Hostile"}).json()["id"]
+    hostile = [
+        (b"not really a jpeg\xff\xd9", "image/jpeg"),
+        (PNG_1PX, "image/jpeg"),
+        (PNG_1PX + b"<script>alert(1)</script>", "image/png"),
+    ]
+    for data, content_type in hostile:
+        r = client.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("hostile", io.BytesIO(data), content_type)},
+        )
+        assert r.status_code == 415
+
+    assert client.get(f"/api/songs/{song_id}").json()["scans"] == []
+    assert not (settings.images_dir / song_id).exists()
+
+
+def test_upload_rejects_extreme_decoded_dimensions(client, settings):
+    song_id = client.post("/api/songs", json={"title": "Too wide"}).json()["id"]
+    image = Image.new("1", (16_001, 1))
+    data = io.BytesIO()
+    image.save(data, "PNG")
+    r = client.post(
+        f"/api/songs/{song_id}/scans",
+        files={"file": ("wide.png", io.BytesIO(data.getvalue()), "image/png")},
+    )
+    assert r.status_code == 415
+    assert "dimensions" in r.json()["detail"]
+    assert not (settings.images_dir / song_id).exists()
 
 
 def test_validation(client):
@@ -228,11 +283,3 @@ def test_cover_scan_id(client):
     _upload(client, song_id, _jpeg_bytes(40, 40))
     listed = client.get("/api/songs").json()
     assert next(s for s in listed if s["id"] == song_id)["cover_scan_id"] == first["id"]
-
-
-def test_token_auth(tmp_path):
-    s = Settings(data_dir=tmp_path / "data", api_token="secret")
-    with TestClient(create_app(s)) as c:
-        assert c.get("/api/songs").status_code == 401
-        r = c.get("/api/songs", headers={"Authorization": "Bearer secret"})
-        assert r.status_code == 200

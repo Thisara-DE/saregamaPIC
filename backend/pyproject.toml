@@ -9,6 +9,8 @@ dependencies = [
     "python-multipart>=0.0.20",
     "pillow>=11.0",
     "anthropic>=0.69",
+    "authlib>=1.6",
+    "itsdangerous>=2.2",
     "truststore>=0.10.4",
 ]
 

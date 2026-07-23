@@ -44,6 +44,15 @@ function routeFetch(routes: Record<string, unknown>) {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
     const key = `${method} ${url}`;
+    if (key === "GET /api/auth/me") {
+      return Promise.resolve(
+        Response.json({
+          id: "user1",
+          email: "thisara@example.com",
+          display_name: "Thisara",
+        }),
+      );
+    }
     if (key in routes) {
       const body = routes[key];
       if (body === 404) {

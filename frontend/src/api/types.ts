@@ -29,6 +29,12 @@ export interface Health {
   version: string;
 }
 
+export interface AuthUser {
+  id: string;
+  email: string;
+  display_name: string;
+}
+
 // --- Transcriptions (STF) — mirror backend/app/schemas.py by hand ---
 
 export interface StfHeader {
