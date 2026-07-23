@@ -133,12 +133,17 @@ def _recognize(
         detail="Daily recognition quota reached",
     )
     if idempotency_key is not None:
-        conn.execute(
-            "INSERT INTO recognition_idempotency"
-            " (user_id, idempotency_key, scan_id, status) VALUES (?, ?, ?, 'started')",
-            (owner_id, idempotency_key, scan_id),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                "INSERT INTO recognition_idempotency"
+                " (user_id, idempotency_key, scan_id, status)"
+                " VALUES (?, ?, ?, 'started')",
+                (owner_id, idempotency_key, scan_id),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            reject_idempotency("Recognition with this Idempotency-Key is in progress")
 
     recognizer = request.app.state.recognizer
     try:
