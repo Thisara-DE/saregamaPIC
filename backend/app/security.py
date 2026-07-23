@@ -38,6 +38,35 @@ def security_event(
     logger.info("%s", json.dumps(event, separators=(",", ":"), sort_keys=True))
 
 
+def upstream_failure(
+    request: Request,
+    action: str,
+    code: str,
+    detail: str,
+    *,
+    user_id: str | None = None,
+    resource_id: str | None = None,
+) -> None:
+    """Log an upstream provider failure verbatim, server-side only.
+
+    Deliberately separate from `security_event`, which promises to carry
+    identifiers only. `detail` is third-party error text, so this never goes to
+    a client: the route returns a safe mapped message and the diagnosis lives
+    here, in the deployment's logs. Never pass user content (STF, images,
+    emails) — only the provider's own message.
+    """
+    event = {
+        "event": action,
+        "outcome": "failed",
+        "error_code": code,
+        "detail": detail,
+        "request_id": getattr(request.state, "request_id", "unknown"),
+        "user_id": user_id,
+        "resource_id": resource_id,
+    }
+    logger.warning("%s", json.dumps(event, separators=(",", ":"), sort_keys=True))
+
+
 def _limited(
     conn: sqlite3.Connection,
     *,

@@ -3,6 +3,7 @@
 
 import io
 import json
+import logging
 import sqlite3
 from types import SimpleNamespace
 
@@ -359,7 +360,7 @@ def test_transcription_404_before_recognition(client):
     assert client.post("/api/scans/nope/recognize").status_code == 404
 
 
-def test_recognition_unavailable_returns_503(tmp_path):
+def test_recognition_unavailable_returns_503(tmp_path, caplog):
     def unavailable(_data, _ct):
         raise RecognitionUnavailable("ANTHROPIC_API_KEY is not set")
 
@@ -370,9 +371,16 @@ def test_recognition_unavailable_returns_503(tmp_path):
             f"/api/songs/{song_id}/scans",
             files={"file": ("p.jpg", io.BytesIO(_jpeg(40, 40)), "image/jpeg")},
         ).json()["id"]
-        r = c.post(f"/api/scans/{scan_id}/recognize")
+        with caplog.at_level(logging.WARNING, logger="saregamapic.security"):
+            r = c.post(f"/api/scans/{scan_id}/recognize")
         assert r.status_code == 503
-        assert "ANTHROPIC_API_KEY" in r.json()["detail"]
+        # The client gets the mapped message; the provider's own text is not
+        # rendered into the browser...
+        assert r.json()["detail"] == "Recognition is unavailable; try again"
+        assert "ANTHROPIC_API_KEY" not in r.text
+        # ...but it must still be recoverable from the deployment's logs, since
+        # recognition_runs keeps only the error code.
+        assert "ANTHROPIC_API_KEY is not set" in caplog.text
         with sqlite3.connect(settings.db_path) as conn:
             run = conn.execute(
                 "SELECT outcome, error_code, raw_stf_json FROM recognition_runs"
@@ -406,6 +414,10 @@ def test_failed_idempotent_recognition_replays_error_without_second_model_call(t
     assert first.status_code == 503
     assert replay.status_code == 503
     assert replay.json()["detail"] == "Recognition returned an invalid draft; try again"
+    # The whole point: one failure, one answer. The first attempt used to return
+    # raw upstream text here while the replay returned the mapped message.
+    assert first.json()["detail"] == replay.json()["detail"]
+    assert "invalid response" not in first.text
     assert calls == 1
     assert action[0] == "completed"
     assert run == ("failed", "invalid_json")

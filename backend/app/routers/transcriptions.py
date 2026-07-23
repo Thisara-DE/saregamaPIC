@@ -23,7 +23,7 @@ from ..recognition import (
     read_scan_bytes,
 )
 from ..schemas import Transcription, TranscriptionSave
-from ..security import enforce_limit, reject_idempotency, security_event
+from ..security import enforce_limit, reject_idempotency, security_event, upstream_failure
 from ..stf import validate_stf
 
 router = APIRouter()
@@ -82,6 +82,16 @@ _FAILURE_DETAILS = {
 }
 
 
+def _safe_detail(code: str | None) -> str:
+    """Map an error code to client-safe text.
+
+    The first attempt and an idempotent replay of it must answer identically —
+    otherwise the same failure leaks raw upstream text once and a sanitized
+    message on retry. Raw provider text goes to the logs via `upstream_failure`.
+    """
+    return _FAILURE_DETAILS.get(code or "", _FAILURE_DETAILS["recognition_unavailable"])
+
+
 @router.get("/scans/{scan_id}/transcription", response_model=Transcription)
 def get_transcription(scan_id: str, request: Request) -> Transcription:
     _scan_row(request, scan_id)  # 404 if the scan is unknown
@@ -132,10 +142,7 @@ def _recognize(
                 (prior["recognition_run_id"], scan_id),
             ).fetchone()
             if run is not None and run["outcome"] == "failed":
-                detail = _FAILURE_DETAILS.get(
-                    run["error_code"], _FAILURE_DETAILS["recognition_unavailable"]
-                )
-                raise HTTPException(status_code=503, detail=detail)
+                raise HTTPException(status_code=503, detail=_safe_detail(run["error_code"]))
             completed = conn.execute(
                 _SELECT_RUN, (prior["recognition_run_id"], scan_id)
             ).fetchone()
@@ -213,7 +220,18 @@ def _recognize(
                 (run_id, owner_id, idempotency_key),
             )
         conn.commit()
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        # recognition_runs stores only error_code, so this is the one place the
+        # provider's own message survives — it must be logged before it is
+        # dropped from the response.
+        upstream_failure(
+            request,
+            "recognition",
+            e.code,
+            str(e),
+            user_id=owner_id,
+            resource_id=scan_id,
+        )
+        raise HTTPException(status_code=503, detail=_safe_detail(e.code)) from e
     except Exception:
         conn.execute(
             "INSERT INTO recognition_runs"
