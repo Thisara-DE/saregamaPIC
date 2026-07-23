@@ -36,6 +36,10 @@ class RecognitionUnavailable(RuntimeError):
     """Raised when recognition can't run (no API key, SDK missing, or a bad
     model response). The route turns this into a clean 503 rather than a 500."""
 
+    def __init__(self, message: str, *, code: str = "recognition_unavailable") -> None:
+        super().__init__(message)
+        self.code = code
+
 
 # Long edge to downscale to before the vision call. Kept above the native long
 # edge of a typical scan so full-page sheets pass through without losing the
@@ -192,6 +196,48 @@ _USER_TEXT = (
     "exactly. Output only the JSON object."
 )
 
+STF_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "song_title": {"type": "string", "maxLength": 200},
+        "header": {
+            "type": "object",
+            "properties": {
+                "concert_scale": {"type": "string"},
+                "alto_scale": {"type": "string"},
+                "beat": {"type": "string"},
+            },
+            "required": ["concert_scale", "alto_scale", "beat"],
+            "additionalProperties": False,
+        },
+        "lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer", "minimum": 1},
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "section",
+                            "sargam",
+                            "run",
+                            "lyric",
+                            "roadmap",
+                            "annotation",
+                        ],
+                    },
+                    "text": {"type": "string"},
+                },
+                "required": ["n", "kind", "text"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["song_title", "header", "lines"],
+    "additionalProperties": False,
+}
+
 
 def _extract_json(text: str) -> dict:
     """Parse the model's reply into a dict, tolerating stray fences/prose."""
@@ -218,12 +264,15 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
     def recognize(data: bytes, _content_type: str) -> RecognitionResult:
         if not api_key:
             raise RecognitionUnavailable(
-                "ANTHROPIC_API_KEY is not set — recognition is unavailable"
+                "ANTHROPIC_API_KEY is not set — recognition is unavailable",
+                code="configuration",
             )
         try:
             import anthropic
         except ImportError as e:  # pragma: no cover - depends on install
-            raise RecognitionUnavailable("the 'anthropic' package is not installed") from e
+            raise RecognitionUnavailable(
+                "the 'anthropic' package is not installed", code="dependency"
+            ) from e
 
         # This machine's network intercepts TLS; Python's bundled CA can't verify
         # api.anthropic.com. Use the Windows trust store instead — the Python
@@ -240,6 +289,12 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
                 model=model,
                 max_tokens=8000,
                 thinking={"type": "adaptive"},
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": STF_OUTPUT_SCHEMA,
+                    }
+                },
                 system=SYSTEM_PROMPT,
                 messages=[
                     {
@@ -259,13 +314,28 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
                 ],
             )
         except anthropic.AnthropicError as e:  # network/auth/rate-limit → clean 503
-            raise RecognitionUnavailable(f"Claude API call failed: {e}") from e
+            raise RecognitionUnavailable(
+                f"Claude API call failed: {e}", code="api_error"
+            ) from e
+
+        if resp.stop_reason == "max_tokens":
+            raise RecognitionUnavailable(
+                "recognition output was truncated; try a clearer crop or split the page",
+                code="max_tokens",
+            )
+        if resp.stop_reason == "refusal":
+            raise RecognitionUnavailable(
+                "the recognition model declined this image",
+                code="refusal",
+            )
 
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         try:
             payload = _extract_json(text)
         except json.JSONDecodeError as e:
-            raise RecognitionUnavailable("model did not return valid STF JSON") from e
+            raise RecognitionUnavailable(
+                "model did not return valid STF JSON", code="invalid_json"
+            ) from e
         suggested_title = payload.pop("song_title", "")
         return RecognitionResult(
             stf=payload,

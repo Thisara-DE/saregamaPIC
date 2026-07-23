@@ -4,14 +4,21 @@
 import io
 import json
 import sqlite3
+from types import SimpleNamespace
 
+import anthropic
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
-from app.recognition import RecognitionResult, RecognitionUnavailable, prepare_image
+from app.recognition import (
+    RecognitionResult,
+    RecognitionUnavailable,
+    make_recognizer,
+    prepare_image,
+)
 
 _DRAFT_STF = {
     "header": {"concert_scale": "G", "alto_scale": "E", "beat": "4/4"},
@@ -59,6 +66,51 @@ def test_prepare_image_downscales_and_applies_exif():
     with Image.open(io.BytesIO(jpeg)) as im:
         # orientation 6 rotates landscape → portrait; long edge capped at 2600
         assert im.size == (1300, 2600)
+
+
+def test_production_recognizer_requests_structured_output_and_handles_truncation(
+    monkeypatch,
+):
+    captured = {}
+    response = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=json.dumps({"song_title": "Title", **_DRAFT_STF}),
+            )
+        ],
+        model="claude-opus-4-8",
+        usage=SimpleNamespace(input_tokens=10, output_tokens=20),
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return response
+
+    monkeypatch.setattr(
+        anthropic,
+        "Anthropic",
+        lambda **_kwargs: SimpleNamespace(messages=FakeMessages()),
+    )
+    recognizer = make_recognizer("test-key", "claude-opus-4-8")
+    result = recognizer(_jpeg(80, 60), "image/jpeg")
+    assert result.stf == _DRAFT_STF
+    assert result.suggested_title == "Title"
+    assert captured["output_config"]["format"]["type"] == "json_schema"
+    assert captured["output_config"]["format"]["schema"]["required"] == [
+        "song_title",
+        "header",
+        "lines",
+    ]
+
+    response.stop_reason = "max_tokens"
+    response.content = [SimpleNamespace(type="text", text='{"song_title":')]
+    with pytest.raises(RecognitionUnavailable) as error:
+        recognizer(_jpeg(80, 60), "image/jpeg")
+    assert error.value.code == "max_tokens"
+    assert "truncated" in str(error.value)
 
 
 def test_recognize_creates_draft_with_metrics(client):
@@ -254,3 +306,34 @@ def test_recognition_unavailable_returns_503(tmp_path):
                 "SELECT outcome, error_code, raw_stf_json FROM recognition_runs"
             ).fetchone()
         assert run == ("failed", "recognition_unavailable", None)
+
+
+def test_failed_idempotent_recognition_replays_error_without_second_model_call(tmp_path):
+    calls = 0
+
+    def unavailable(_data, _ct):
+        nonlocal calls
+        calls += 1
+        raise RecognitionUnavailable("invalid response", code="invalid_json")
+
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings, recognizer=unavailable)) as c:
+        _, scan_id = _scan(c)
+        headers = {"Idempotency-Key": "failed-recognition"}
+        first = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+        replay = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+        with sqlite3.connect(settings.db_path) as conn:
+            action = conn.execute(
+                "SELECT status, recognition_run_id FROM recognition_idempotency"
+            ).fetchone()
+            run = conn.execute(
+                "SELECT outcome, error_code FROM recognition_runs WHERE id = ?",
+                (action[1],),
+            ).fetchone()
+
+    assert first.status_code == 503
+    assert replay.status_code == 503
+    assert replay.json()["detail"] == "Recognition returned an invalid draft; try again"
+    assert calls == 1
+    assert action[0] == "completed"
+    assert run == ("failed", "invalid_json")

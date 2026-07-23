@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
@@ -27,6 +28,12 @@ class CurrentUser(BaseModel):
     id: str
     email: str
     display_name: str
+
+
+@dataclass(frozen=True)
+class AuthenticatedSession:
+    user_id: str
+    should_renew: bool
 
 
 def configure_oauth(settings: Settings) -> OAuth:
@@ -91,11 +98,15 @@ def create_session(
     return token
 
 
-def authenticate_session(conn: sqlite3.Connection, token: str | None) -> str | None:
+def authenticate_session(
+    conn: sqlite3.Connection, token: str | None, settings: Settings
+) -> AuthenticatedSession | None:
     if not token:
         return None
     row = conn.execute(
-        "SELECT user_id, expires_at, revoked_at FROM sessions WHERE id_hash = ?",
+        "SELECT s.user_id, s.expires_at, s.revoked_at"
+        " FROM sessions s JOIN users u ON u.id = s.user_id"
+        " WHERE s.id_hash = ? AND u.status = 'active'",
         (_token_hash(token),),
     ).fetchone()
     if row is None or row["revoked_at"] is not None:
@@ -106,7 +117,29 @@ def authenticate_session(conn: sqlite3.Connection, token: str | None) -> str | N
         return None
     if expires_at <= datetime.now(UTC):
         return None
-    return str(row["user_id"])
+    renew_at = datetime.now(UTC) + timedelta(days=max(1, settings.session_days // 2))
+    return AuthenticatedSession(
+        user_id=str(row["user_id"]),
+        should_renew=expires_at <= renew_at,
+    )
+
+
+def renew_session(
+    conn: sqlite3.Connection,
+    token: str,
+    settings: Settings,
+    response: Response,
+) -> None:
+    """Extend a still-valid device session and refresh its persistent cookie."""
+    expires_at = datetime.now(UTC) + timedelta(days=settings.session_days)
+    updated = conn.execute(
+        "UPDATE sessions SET expires_at = ?"
+        " WHERE id_hash = ? AND revoked_at IS NULL",
+        (expires_at.isoformat(), _token_hash(token)),
+    )
+    conn.commit()
+    if updated.rowcount == 1:
+        _set_session_cookie(response, token, settings)
 
 
 def require_same_origin(request: Request, settings: Settings) -> None:

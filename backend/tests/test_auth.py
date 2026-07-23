@@ -126,6 +126,55 @@ def test_expired_session_is_rejected(auth_client, auth_settings):
     assert auth_client.get("/api/auth/me").status_code == 401
 
 
+def test_active_session_renews_database_expiry_and_persistent_cookie(
+    auth_client, auth_settings
+):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    token = _session(auth_settings, owner_id)
+    near_expiry = datetime.now(UTC) + timedelta(days=1)
+    conn = db.connect(auth_settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE sessions SET expires_at = ?",
+            (near_expiry.isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _as(auth_client, token)
+    response = auth_client.get("/api/auth/me")
+    assert response.status_code == 200
+    assert f"Max-Age={auth_settings.session_days * 86400}" in response.headers["set-cookie"]
+
+    conn = db.connect(auth_settings.db_path)
+    try:
+        renewed = datetime.fromisoformat(
+            conn.execute("SELECT expires_at FROM sessions").fetchone()["expires_at"]
+        )
+    finally:
+        conn.close()
+    assert renewed > datetime.now(UTC) + timedelta(days=360)
+
+
+def test_disabled_user_session_is_rejected(auth_client, auth_settings):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    token = _session(auth_settings, owner_id)
+    conn = db.connect(auth_settings.db_path)
+    try:
+        conn.execute("UPDATE users SET status = 'disabled' WHERE id = ?", (owner_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    _as(auth_client, token)
+    assert auth_client.get("/api/songs").status_code == 401
+
+
+def test_default_session_lifetime_is_one_year(monkeypatch):
+    monkeypatch.delenv("SAREGAMAPIC_SESSION_DAYS", raising=False)
+    assert Settings().session_days == 365
+
+
 def test_login_is_rate_limited_per_ip(tmp_path):
     settings = Settings(
         data_dir=tmp_path / "data",

@@ -52,7 +52,7 @@ class Settings:
         default_factory=lambda: os.environ.get("SAREGAMAPIC_INITIAL_OWNER_EMAIL", "")
     )
     session_days: int = field(
-        default_factory=lambda: int(os.environ.get("SAREGAMAPIC_SESSION_DAYS", "30"))
+        default_factory=lambda: int(os.environ.get("SAREGAMAPIC_SESSION_DAYS", "365"))
     )
     login_limit_per_10_minutes: int = field(
         default_factory=lambda: int(os.environ.get("SAREGAMAPIC_LOGIN_LIMIT_10M", "20"))
@@ -118,8 +118,8 @@ class Settings:
             raise RuntimeError(
                 f"Authentication enabled but settings are missing: {', '.join(missing)}"
             )
-        if self.session_days < 1 or self.session_days > 90:
-            raise RuntimeError("SAREGAMAPIC_SESSION_DAYS must be between 1 and 90")
+        if self.session_days < 1 or self.session_days > 3650:
+            raise RuntimeError("SAREGAMAPIC_SESSION_DAYS must be between 1 and 3650")
         limits = {
             "SAREGAMAPIC_LOGIN_LIMIT_10M": self.login_limit_per_10_minutes,
             "SAREGAMAPIC_UPLOAD_LIMIT_1M": self.upload_limit_per_minute,

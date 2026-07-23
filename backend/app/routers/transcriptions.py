@@ -70,6 +70,17 @@ _SELECT_RUN = (
     " WHERE rr.id = ? AND rr.scan_id = ? AND rr.outcome = 'succeeded'"
 )
 
+_FAILURE_DETAILS = {
+    "api_error": "Recognition service request failed; try again",
+    "configuration": "Recognition is not configured",
+    "dependency": "Recognition service is unavailable",
+    "invalid_json": "Recognition returned an invalid draft; try again",
+    "max_tokens": "Recognition output was truncated; try a clearer crop or split the page",
+    "refusal": "The recognition model declined this image",
+    "internal_error": "Recognition failed unexpectedly; try again",
+    "recognition_unavailable": "Recognition is unavailable; try again",
+}
+
 
 @router.get("/scans/{scan_id}/transcription", response_model=Transcription)
 def get_transcription(scan_id: str, request: Request) -> Transcription:
@@ -115,6 +126,16 @@ def _recognize(
                 reject_idempotency("Idempotency-Key was already used for another scan")
             if prior["status"] == "started":
                 reject_idempotency("Recognition with this Idempotency-Key is in progress")
+            run = conn.execute(
+                "SELECT outcome, error_code FROM recognition_runs"
+                " WHERE id = ? AND scan_id = ?",
+                (prior["recognition_run_id"], scan_id),
+            ).fetchone()
+            if run is not None and run["outcome"] == "failed":
+                detail = _FAILURE_DETAILS.get(
+                    run["error_code"], _FAILURE_DETAILS["recognition_unavailable"]
+                )
+                raise HTTPException(status_code=503, detail=detail)
             completed = conn.execute(
                 _SELECT_RUN, (prior["recognition_run_id"], scan_id)
             ).fetchone()
@@ -173,7 +194,7 @@ def _recognize(
             "INSERT INTO recognition_runs"
             " (id, scan_id, user_id, preprocessing_version, prompt_version,"
             " latency_ms, outcome, error_code)"
-            " VALUES (?, ?, ?, ?, ?, ?, 'failed', 'recognition_unavailable')",
+            " VALUES (?, ?, ?, ?, ?, ?, 'failed', ?)",
             (
                 run_id,
                 scan_id,
@@ -181,13 +202,15 @@ def _recognize(
                 PREPROCESSING_VERSION,
                 PROMPT_VERSION,
                 round((time.monotonic() - started) * 1000),
+                e.code,
             ),
         )
         if idempotency_key is not None:
             conn.execute(
-                "DELETE FROM recognition_idempotency"
+                "UPDATE recognition_idempotency"
+                " SET status = 'completed', recognition_run_id = ?"
                 " WHERE user_id = ? AND idempotency_key = ?",
-                (owner_id, idempotency_key),
+                (run_id, owner_id, idempotency_key),
             )
         conn.commit()
         raise HTTPException(status_code=503, detail=str(e)) from e
@@ -208,9 +231,10 @@ def _recognize(
         )
         if idempotency_key is not None:
             conn.execute(
-                "DELETE FROM recognition_idempotency"
+                "UPDATE recognition_idempotency"
+                " SET status = 'completed', recognition_run_id = ?"
                 " WHERE user_id = ? AND idempotency_key = ?",
-                (owner_id, idempotency_key),
+                (run_id, owner_id, idempotency_key),
             )
         conn.commit()
         raise

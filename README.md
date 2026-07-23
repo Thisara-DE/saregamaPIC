@@ -165,6 +165,10 @@ GOOGLE_OAUTH_CLIENT_ID=<Google web OAuth client ID>
 GOOGLE_OAUTH_CLIENT_SECRET=<Google web OAuth client secret>
 ```
 
+Device sessions default to a 365-day rolling lifetime and renew halfway through
+that window while the app remains in use. `SAREGAMAPIC_SESSION_DAYS` may override
+the lifetime (1–3650 days). Sign out and server-side revocation remain immediate.
+
 Register `<SAREGAMAPIC_APP_BASE_URL>/api/auth/callback` as the Google OAuth
 client's authorized redirect URI. Secrets belong only in the runtime environment;
 never commit them or place them in the project vault.

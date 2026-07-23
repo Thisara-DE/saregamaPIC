@@ -19,6 +19,7 @@ from .auth import (
     authenticate_session,
     configure_oauth,
     prepare_initial_owner,
+    renew_session,
     require_same_origin,
 )
 from .auth import (
@@ -88,9 +89,12 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
         request.state.db = conn
         request.state.request_id = uuid.uuid4().hex
         try:
+            session_token = request.cookies.get(SESSION_COOKIE)
+            authenticated_session = None
             if settings.auth_enabled:
-                request.state.user_id = authenticate_session(
-                    conn, request.cookies.get(SESSION_COOKIE)
+                authenticated_session = authenticate_session(conn, session_token, settings)
+                request.state.user_id = (
+                    authenticated_session.user_id if authenticated_session is not None else None
                 )
                 public_path = request.url.path in {
                     "/api/health",
@@ -107,6 +111,12 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
             else:
                 request.state.user_id = INITIAL_OWNER_ID
             response = await call_next(request)
+            if (
+                authenticated_session is not None
+                and authenticated_session.should_renew
+                and session_token is not None
+            ):
+                renew_session(conn, session_token, settings, response)
             response.headers["X-Request-ID"] = request.state.request_id
             return response
         finally:
