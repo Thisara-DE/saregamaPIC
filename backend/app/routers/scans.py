@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 from ..auth import current_user_id
+from ..security import enforce_limit, security_event
 from ..storage import delete_scan_files, ensure_preview, ensure_thumbnail
 
 router = APIRouter()
@@ -66,6 +67,14 @@ def get_scan_preview(scan_id: str, request: Request) -> FileResponse:
 def delete_scan(scan_id: str, request: Request) -> Response:
     """Remove one page (e.g. a blurry retake); remaining pages are renumbered 1..n."""
     row = _scan_row(request, scan_id)
+    owner_id = current_user_id(request)
+    enforce_limit(
+        request,
+        action="destructive",
+        subject=owner_id,
+        limit=request.app.state.settings.destructive_limit_per_hour,
+        window_seconds=3600,
+    )
     conn: sqlite3.Connection = request.state.db
     conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
     remaining = conn.execute(
@@ -75,4 +84,7 @@ def delete_scan(scan_id: str, request: Request) -> Response:
         conn.execute("UPDATE scans SET page_no = ? WHERE id = ?", (i, r["id"]))
     conn.commit()
     delete_scan_files(request.app.state.settings.data_dir, row["image_path"], scan_id)
+    security_event(
+        request, "scan_delete", "succeeded", user_id=owner_id, resource_id=scan_id
+    )
     return Response(status_code=204)

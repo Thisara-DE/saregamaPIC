@@ -54,6 +54,28 @@ class Settings:
     session_days: int = field(
         default_factory=lambda: int(os.environ.get("SAREGAMAPIC_SESSION_DAYS", "30"))
     )
+    login_limit_per_10_minutes: int = field(
+        default_factory=lambda: int(os.environ.get("SAREGAMAPIC_LOGIN_LIMIT_10M", "20"))
+    )
+    upload_limit_per_minute: int = field(
+        default_factory=lambda: int(os.environ.get("SAREGAMAPIC_UPLOAD_LIMIT_1M", "5"))
+    )
+    upload_quota_per_day: int = field(
+        default_factory=lambda: int(os.environ.get("SAREGAMAPIC_UPLOAD_QUOTA_DAY", "100"))
+    )
+    recognition_limit_per_hour: int = field(
+        default_factory=lambda: int(os.environ.get("SAREGAMAPIC_RECOGNITION_LIMIT_1H", "10"))
+    )
+    recognition_quota_per_day: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_RECOGNITION_QUOTA_DAY", "30")
+        )
+    )
+    destructive_limit_per_hour: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_DESTRUCTIVE_LIMIT_1H", "100")
+        )
+    )
     # Claude vision recognition (Phase 2). The key is read from the environment
     # and never committed. Empty = recognition returns a
     # clean 503 until a key is exported.
@@ -98,3 +120,14 @@ class Settings:
             )
         if self.session_days < 1 or self.session_days > 90:
             raise RuntimeError("SAREGAMAPIC_SESSION_DAYS must be between 1 and 90")
+        limits = {
+            "SAREGAMAPIC_LOGIN_LIMIT_10M": self.login_limit_per_10_minutes,
+            "SAREGAMAPIC_UPLOAD_LIMIT_1M": self.upload_limit_per_minute,
+            "SAREGAMAPIC_UPLOAD_QUOTA_DAY": self.upload_quota_per_day,
+            "SAREGAMAPIC_RECOGNITION_LIMIT_1H": self.recognition_limit_per_hour,
+            "SAREGAMAPIC_RECOGNITION_QUOTA_DAY": self.recognition_quota_per_day,
+            "SAREGAMAPIC_DESTRUCTIVE_LIMIT_1H": self.destructive_limit_per_hour,
+        }
+        invalid = [name for name, value in limits.items() if value < 1]
+        if invalid:
+            raise RuntimeError(f"Security limits must be positive: {', '.join(invalid)}")

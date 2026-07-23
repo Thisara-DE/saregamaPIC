@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from .config import Settings
+from .security import client_ip, enforce_limit, security_event
 
 INITIAL_OWNER_ID = "00000000000000000000000000000001"
 SESSION_COOKIE = "srg_session"
@@ -128,6 +129,13 @@ async def login(request: Request, return_to: str = "/") -> Response:
     settings: Settings = request.app.state.settings
     if not settings.auth_enabled:
         return RedirectResponse(_safe_return_to(return_to), status_code=303)
+    enforce_limit(
+        request,
+        action="login",
+        subject=client_ip(request),
+        limit=settings.login_limit_per_10_minutes,
+        window_seconds=600,
+    )
     request.session["return_to"] = _safe_return_to(return_to)
     redirect_uri = f"{settings.app_base_url}/api/auth/callback"
     return await request.app.state.oauth.google.authorize_redirect(request, redirect_uri)
@@ -152,6 +160,7 @@ async def callback(request: Request) -> Response:
         "SELECT id, status FROM users WHERE email = ? COLLATE NOCASE", (email,)
     ).fetchone()
     if user is None or user["status"] == "disabled":
+        security_event(request, "login", "uninvited")
         raise HTTPException(status_code=403, detail="This account has not been invited")
 
     identity = conn.execute(
@@ -174,6 +183,7 @@ async def callback(request: Request) -> Response:
     destination = _safe_return_to(request.session.pop("return_to", "/"))
     response = RedirectResponse(destination, status_code=303)
     _set_session_cookie(response, session_token, settings)
+    security_event(request, "login", "succeeded", user_id=str(user["id"]))
     return response
 
 
@@ -200,4 +210,10 @@ def logout(request: Request) -> Response:
         request.state.db.commit()
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/")
+    security_event(
+        request,
+        "logout",
+        "succeeded",
+        user_id=getattr(request.state, "user_id", None),
+    )
     return response

@@ -76,6 +76,46 @@ def test_recognize_creates_draft_with_metrics(client):
     assert got.json()["stf"] == _DRAFT_STF
 
 
+def test_recognition_idempotency_replays_without_second_model_call(tmp_path):
+    calls = 0
+
+    def counting_recognizer(_data, _content_type):
+        nonlocal calls
+        calls += 1
+        return _fake_recognizer(_data, _content_type)
+
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings, recognizer=counting_recognizer)) as c:
+        _, scan_id = _scan(c)
+        _, other_scan_id = _scan(c)
+        headers = {"Idempotency-Key": "recognize-action-1"}
+        first = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+        replay = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+        conflict = c.post(f"/api/scans/{other_scan_id}/recognize", headers=headers)
+
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert calls == 1
+    assert conflict.status_code == 409
+
+
+def test_recognition_daily_quota(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        recognition_limit_per_hour=10,
+        recognition_quota_per_day=1,
+    )
+    with TestClient(create_app(settings, recognizer=_fake_recognizer)) as c:
+        _, first_scan = _scan(c)
+        _, second_scan = _scan(c)
+        first = c.post(f"/api/scans/{first_scan}/recognize")
+        second = c.post(f"/api/scans/{second_scan}/recognize")
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Daily recognition quota reached"
+
+
 def test_recognize_reruns_overwrite_draft_but_not_reviewed(client):
     _, scan_id = _scan(client)
     client.post(f"/api/scans/{scan_id}/recognize")

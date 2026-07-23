@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, UploadFile
 
 from ..auth import current_user_id
 from ..schemas import Scan, Song, SongCreate, SongDetail
+from ..security import enforce_limit, security_event
 from ..storage import (
     InvalidImage,
     delete_scan_files,
@@ -67,6 +68,13 @@ def list_songs(request: Request) -> list[Song]:
 def delete_song(song_id: str, request: Request) -> Response:
     conn = _db(request)
     owner_id = current_user_id(request)
+    enforce_limit(
+        request,
+        action="destructive",
+        subject=owner_id,
+        limit=request.app.state.settings.destructive_limit_per_hour,
+        window_seconds=3600,
+    )
     _song_row(conn, song_id, owner_id)  # 404 for unknown or another user's song
     scans = conn.execute(
         "SELECT id, image_path FROM scans WHERE song_id = ?", (song_id,)
@@ -76,6 +84,9 @@ def delete_song(song_id: str, request: Request) -> Response:
     data_dir = request.app.state.settings.data_dir
     for scan in scans:
         delete_scan_files(data_dir, scan["image_path"], scan["id"])
+    security_event(
+        request, "song_delete", "succeeded", user_id=owner_id, resource_id=song_id
+    )
     return Response(status_code=204)
 
 
@@ -94,7 +105,24 @@ def get_song(song_id: str, request: Request) -> SongDetail:
 @router.post("/songs/{song_id}/scans", response_model=Scan, status_code=201)
 async def upload_scan(song_id: str, file: UploadFile, request: Request) -> Scan:
     conn = _db(request)
-    _song_row(conn, song_id, current_user_id(request))
+    owner_id = current_user_id(request)
+    _song_row(conn, song_id, owner_id)
+    settings = request.app.state.settings
+    enforce_limit(
+        request,
+        action="upload_rate",
+        subject=owner_id,
+        limit=settings.upload_limit_per_minute,
+        window_seconds=60,
+    )
+    enforce_limit(
+        request,
+        action="upload_quota",
+        subject=owner_id,
+        limit=settings.upload_quota_per_day,
+        window_seconds=86_400,
+        detail="Daily upload quota reached",
+    )
 
     content_type = file.content_type or ""
     if extension_for(content_type) is None:
@@ -130,4 +158,7 @@ async def upload_scan(song_id: str, file: UploadFile, request: Request) -> Scan:
         "SELECT id, song_id, page_no, content_type, uploaded_at FROM scans WHERE id = ?",
         (scan_id,),
     ).fetchone()
+    security_event(
+        request, "scan_upload", "succeeded", user_id=owner_id, resource_id=scan_id
+    )
     return Scan(**dict(row))

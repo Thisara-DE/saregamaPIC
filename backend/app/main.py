@@ -1,6 +1,7 @@
 """App factory."""
 
 import sqlite3
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
@@ -85,6 +86,7 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     ) -> Response:
         conn: sqlite3.Connection = db.connect(settings.db_path)
         request.state.db = conn
+        request.state.request_id = uuid.uuid4().hex
         try:
             if settings.auth_enabled:
                 request.state.user_id = authenticate_session(
@@ -104,7 +106,9 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
                         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
             else:
                 request.state.user_id = INITIAL_OWNER_ID
-            return await call_next(request)
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request.state.request_id
+            return response
         finally:
             conn.close()
 

@@ -11,11 +11,12 @@ import json
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from ..auth import current_user_id
 from ..recognition import RecognitionUnavailable, read_scan_bytes
 from ..schemas import Transcription, TranscriptionSave
+from ..security import enforce_limit, reject_idempotency, security_event
 from ..stf import validate_stf
 
 router = APIRouter()
@@ -64,14 +65,44 @@ def get_transcription(scan_id: str, request: Request) -> Transcription:
 
 
 @router.post("/scans/{scan_id}/recognize", response_model=Transcription, status_code=201)
-def recognize(scan_id: str, request: Request) -> Transcription:
+def recognize(
+    scan_id: str,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Transcription:
     """Run Claude vision on the scan's original image → a draft transcription.
 
     Refuses to clobber a human-reviewed transcription (409). Overwrites an
     existing draft (re-running recognition is fine).
     """
+    return _recognize(scan_id, request, idempotency_key)
+
+
+def _recognize(
+    scan_id: str,
+    request: Request,
+    idempotency_key: str | None,
+) -> Transcription:
     scan = _scan_row(request, scan_id)
     conn: sqlite3.Connection = request.state.db
+    owner_id = current_user_id(request)
+    if idempotency_key is not None:
+        if not 1 <= len(idempotency_key) <= 128 or not idempotency_key.isascii():
+            raise HTTPException(status_code=400, detail="Invalid Idempotency-Key")
+        prior = conn.execute(
+            "SELECT scan_id, status FROM recognition_idempotency"
+            " WHERE user_id = ? AND idempotency_key = ?",
+            (owner_id, idempotency_key),
+        ).fetchone()
+        if prior is not None:
+            if prior["scan_id"] != scan_id:
+                reject_idempotency("Idempotency-Key was already used for another scan")
+            if prior["status"] == "started":
+                reject_idempotency("Recognition with this Idempotency-Key is in progress")
+            completed = conn.execute(_SELECT, (scan_id,)).fetchone()
+            if completed is None:
+                reject_idempotency("Completed idempotent result is unavailable")
+            return _to_response(completed)
     existing = conn.execute(_SELECT, (scan_id,)).fetchone()
     if existing is not None and existing["status"] == "reviewed":
         raise HTTPException(
@@ -85,10 +116,41 @@ def recognize(scan_id: str, request: Request) -> Transcription:
     except OSError as e:
         raise HTTPException(status_code=404, detail="Image file missing from data dir") from e
 
+    settings = request.app.state.settings
+    enforce_limit(
+        request,
+        action="recognition_rate",
+        subject=owner_id,
+        limit=settings.recognition_limit_per_hour,
+        window_seconds=3600,
+    )
+    enforce_limit(
+        request,
+        action="recognition_quota",
+        subject=owner_id,
+        limit=settings.recognition_quota_per_day,
+        window_seconds=86_400,
+        detail="Daily recognition quota reached",
+    )
+    if idempotency_key is not None:
+        conn.execute(
+            "INSERT INTO recognition_idempotency"
+            " (user_id, idempotency_key, scan_id, status) VALUES (?, ?, ?, 'started')",
+            (owner_id, idempotency_key, scan_id),
+        )
+        conn.commit()
+
     recognizer = request.app.state.recognizer
     try:
         result = recognizer(image, scan["content_type"])
     except RecognitionUnavailable as e:
+        if idempotency_key is not None:
+            conn.execute(
+                "DELETE FROM recognition_idempotency"
+                " WHERE user_id = ? AND idempotency_key = ?",
+                (owner_id, idempotency_key),
+            )
+            conn.commit()
         raise HTTPException(status_code=503, detail=str(e)) from e
 
     stf_json = json.dumps(result.stf, ensure_ascii=False)
@@ -108,6 +170,16 @@ def recognize(scan_id: str, request: Request) -> Transcription:
             (stf_json, result.model, result.input_tokens, result.output_tokens, scan_id),
         )
     conn.commit()
+    if idempotency_key is not None:
+        conn.execute(
+            "UPDATE recognition_idempotency SET status = 'completed'"
+            " WHERE user_id = ? AND idempotency_key = ?",
+            (owner_id, idempotency_key),
+        )
+        conn.commit()
+    security_event(
+        request, "recognition", "succeeded", user_id=owner_id, resource_id=scan_id
+    )
     return _to_response(conn.execute(_SELECT, (scan_id,)).fetchone())
 
 

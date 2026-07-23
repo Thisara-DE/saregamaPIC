@@ -92,7 +92,10 @@ export function getTranscription(scanId: string): Promise<Transcription> {
 }
 
 export function recognizeScan(scanId: string): Promise<Transcription> {
-  return request<Transcription>(`/api/scans/${scanId}/recognize`, { method: "POST" });
+  return request<Transcription>(`/api/scans/${scanId}/recognize`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
 }
 
 export function saveTranscription(

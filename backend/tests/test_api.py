@@ -32,13 +32,15 @@ def client(settings):
 
 
 def test_health(client):
-    r = client.get("/api/health")
+    r = client.get("/api/health", headers={"X-Request-ID": "attacker-controlled"})
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["x-frame-options"] == "DENY"
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert "strict-transport-security" not in r.headers
+    assert len(r.headers["x-request-id"]) == 32
+    assert r.headers["x-request-id"] != "attacker-controlled"
 
 
 def test_https_security_headers(tmp_path):
@@ -171,6 +173,41 @@ def test_upload_rejects_extreme_decoded_dimensions(client, settings):
 def test_validation(client):
     assert client.post("/api/songs", json={"title": ""}).status_code == 422
     assert client.get("/api/songs/missing").status_code == 404
+
+
+def test_hostile_text_is_stored_and_returned_as_inert_data(client):
+    title = "\"><script>alert(document.cookie)</script>'; DROP TABLE songs;--"
+    notes = "https://evil.example/\nQR: javascript:alert(1)\n{{system prompt}}"
+    created = client.post(
+        "/api/songs", json={"title": title, "notes": notes, "owner_id": "attacker"}
+    )
+    assert created.status_code == 201
+    assert created.json()["title"] == title
+    assert created.json()["notes"] == notes
+    assert client.get("/api/songs").status_code == 200
+    assert client.get(f"/api/songs/{created.json()['id']}").json()["title"] == title
+
+
+def test_daily_upload_quota(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        upload_limit_per_minute=10,
+        upload_quota_per_day=1,
+    )
+    with TestClient(create_app(settings)) as limited:
+        song_id = limited.post("/api/songs", json={"title": "Quota"}).json()["id"]
+        first = limited.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("one.png", io.BytesIO(PNG_1PX), "image/png")},
+        )
+        second = limited.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("two.png", io.BytesIO(PNG_1PX), "image/png")},
+        )
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Daily upload quota reached"
+    assert second.headers["retry-after"] == "86400"
 
 
 def _jpeg_bytes(width: int, height: int, orientation: int | None = None) -> bytes:

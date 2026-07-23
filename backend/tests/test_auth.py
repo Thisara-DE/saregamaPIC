@@ -2,6 +2,7 @@
 
 import io
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -109,6 +110,47 @@ def test_logout_revokes_server_session(auth_client, auth_settings):
     assert auth_client.get("/api/auth/me").status_code == 401
 
 
+def test_expired_session_is_rejected(auth_client, auth_settings):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    token = _session(auth_settings, owner_id)
+    conn = db.connect(auth_settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE sessions SET expires_at = ?",
+            ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _as(auth_client, token)
+    assert auth_client.get("/api/auth/me").status_code == 401
+
+
+def test_login_is_rate_limited_per_ip(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_enabled=True,
+        app_base_url=ORIGIN,
+        google_client_id="test-client",
+        google_client_secret="test-secret",
+        oauth_state_secret="x" * 64,
+        initial_owner_email="owner@example.com",
+        login_limit_per_10_minutes=1,
+    )
+
+    class FakeGoogle:
+        async def authorize_redirect(self, request, redirect_uri):
+            return RedirectResponse("https://accounts.google.test/login")
+
+    with TestClient(create_app(settings), base_url=ORIGIN) as client:
+        client.app.state.oauth = SimpleNamespace(google=FakeGoogle())
+        first = client.get("/api/auth/login", follow_redirects=False)
+        second = client.get("/api/auth/login", follow_redirects=False)
+    assert first.status_code == 307
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "600"
+
+
 def test_google_callback_activates_invited_owner_and_preserves_return_path(
     auth_client,
 ):
@@ -187,6 +229,16 @@ def test_two_users_cannot_discover_or_access_each_others_resources(
     ).status_code == 404
     assert _post(
         auth_client, f"/api/scans/{scan['id']}/recognize"
+    ).status_code == 404
+    assert auth_client.put(
+        f"/api/scans/{scan['id']}/transcription",
+        headers={"Origin": ORIGIN},
+        json={"stf": stf, "status": "draft"},
+    ).status_code == 404
+    assert _post(
+        auth_client,
+        f"/api/songs/{song['id']}/scans",
+        files={"file": ("foreign.png", io.BytesIO(PNG_1PX), "image/png")},
     ).status_code == 404
     assert auth_client.delete(
         f"/api/scans/{scan['id']}", headers={"Origin": ORIGIN}
