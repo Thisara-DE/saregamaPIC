@@ -9,11 +9,18 @@ import json
 import os
 import sqlite3
 import time
+from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from statistics import mean
 
 from app.learning import evaluation_metrics
 from app.recognition import make_recognizer, read_scan_bytes
+
+
+def _mean(values: Iterable[float]) -> float | None:
+    collected = list(values)
+    return mean(collected) if collected else None
 
 
 def main() -> None:
@@ -70,19 +77,46 @@ def main() -> None:
             )
             for row in rows
         ]
+    # Which symbol classes actually cost the most corrections, worst first —
+    # this is what a targeted prompt fix is aimed at.
+    category_totals: Counter[str] = Counter()
+    for item in results:
+        category_totals.update(item["categories"])
+    corrected_tokens = sum(item["corrected_token_count"] for item in results)
+
     report = {
         "reviewed_sheet_count": len(results),
         "baseline_ready": len(results) >= 5,
         "exact_sheet_matches": sum(item["exact_token_match"] for item in results),
-        "mean_token_accuracy": mean(item["exact_token_accuracy"] for item in results)
-        if results
-        else None,
-        "mean_line_accuracy": mean(item["line_accuracy"] for item in results)
-        if results
-        else None,
+        "mean_token_accuracy": _mean(item["exact_token_accuracy"] for item in results),
+        "mean_line_accuracy": _mean(item["line_accuracy"] for item in results),
+        "corrections_by_symbol": [
+            {
+                "category": category,
+                "corrected_tokens": count,
+                "share_of_all_corrections": round(count / sum(category_totals.values()), 4),
+                "per_1000_tokens": round(1000 * count / corrected_tokens, 2)
+                if corrected_tokens
+                else None,
+                "sheets_affected": sum(1 for item in results if item["categories"].get(category)),
+            }
+            for category, count in category_totals.most_common()
+        ],
+        "per_sheet": [
+            {
+                "sheet": index,
+                "token_accuracy": round(item["exact_token_accuracy"], 4),
+                "line_accuracy": round(item["line_accuracy"], 4),
+                "changed_tokens": item["changed_token_count"],
+                "categories": item["categories"],
+            }
+            for index, item in enumerate(results, start=1)
+        ],
         "total_input_tokens": sum(item["input_tokens"] or 0 for item in results),
         "total_output_tokens": sum(item["output_tokens"] or 0 for item in results),
-        "mean_latency_ms": mean(item["latency_ms"] for item in results) if results else None,
+        "mean_latency_ms": _mean(
+            item["latency_ms"] for item in results if item["latency_ms"] is not None
+        ),
     }
     print(json.dumps(report, indent=2, sort_keys=True))
 

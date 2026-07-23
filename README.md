@@ -191,6 +191,17 @@ cd backend
 uv run python -m scripts.evaluate_recognition
 ```
 
+The report ranks `corrections_by_symbol` worst-first — which symbol class (curve,
+accidental, octave, barline, letter, `alien_letter`, rhythm, header, layout) actually
+costs the most corrections — and breaks the same counts down `per_sheet` so a single
+bad scan does not hide behind the mean. `alien_letter` counts notes read as letters
+outside `S R G M P D N`; a high count there means misreads rather than mark errors.
+Use the ranking to aim a prompt fix at one symbol class, then re-run to compare.
+
+`baseline_ready` turns true at five reviewed sheets. Counting a sheet requires a
+*preserved raw draft*: recognize the scan, then correct it to `reviewed`. Sheets
+reviewed before migration 005 have no stored raw draft and are deliberately excluded.
+
 Passing `--replay --model <model-id>` evaluates a candidate model/prompt against the
 private reviewed scans. Replay invokes the configured recognition API and incurs API
 cost, so run it deliberately.

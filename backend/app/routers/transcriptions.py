@@ -241,12 +241,16 @@ def _recognize(
 
     stf_json = json.dumps(result.stf, ensure_ascii=False)
     suggested_title = (result.suggested_title or "").strip()[:200]
+    # One timestamp for the run and the transcription it produces: a replayed
+    # idempotent action reads the run, the original response reads the
+    # transcription, and the two bodies must match exactly.
+    stamped_at = conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')").fetchone()[0]
     conn.execute(
         "INSERT INTO recognition_runs"
         " (id, scan_id, user_id, preprocessing_version, prompt_version, model,"
         " suggested_title, raw_stf_json, warnings_json, input_tokens, output_tokens,"
-        " latency_ms, outcome)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'succeeded')",
+        " latency_ms, outcome, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'succeeded', ?)",
         (
             run_id,
             scan_id,
@@ -260,6 +264,7 @@ def _recognize(
             result.input_tokens,
             result.output_tokens,
             round((time.monotonic() - started) * 1000),
+            stamped_at,
         ),
     )
     if suggested_title:
@@ -272,7 +277,7 @@ def _recognize(
         conn.execute(
             "INSERT INTO transcriptions"
             " (id, scan_id, stf_json, status, model, input_tokens, output_tokens,"
-            " recognition_run_id) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?)",
+            " recognition_run_id, updated_at) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
             (
                 transcription_id,
                 scan_id,
@@ -281,6 +286,7 @@ def _recognize(
                 result.input_tokens,
                 result.output_tokens,
                 run_id,
+                stamped_at,
             ),
         )
     else:
@@ -288,13 +294,14 @@ def _recognize(
         conn.execute(
             "UPDATE transcriptions SET stf_json = ?, status = 'draft', model = ?,"
             " input_tokens = ?, output_tokens = ?, recognition_run_id = ?,"
-            " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE scan_id = ?",
+            " updated_at = ? WHERE scan_id = ?",
             (
                 stf_json,
                 result.model,
                 result.input_tokens,
                 result.output_tokens,
                 run_id,
+                stamped_at,
                 scan_id,
             ),
         )

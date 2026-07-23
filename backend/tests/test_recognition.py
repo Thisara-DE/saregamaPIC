@@ -187,6 +187,25 @@ def test_recognition_idempotency_replays_without_second_model_call(tmp_path):
     assert conflict.status_code == 409
 
 
+def test_recognition_stamps_run_and_transcription_with_one_timestamp(client, tmp_path):
+    """The original response reads `transcriptions.updated_at`, a replay reads
+    `recognition_runs.created_at`. Separate clock reads made the two bodies
+    differ whenever the inserts straddled a millisecond."""
+    _, scan_id = _scan(client)
+    client.post(f"/api/scans/{scan_id}/recognize")
+
+    conn = sqlite3.connect(tmp_path / "data" / "saregamapic.db")
+    row = conn.execute(
+        "SELECT t.updated_at, rr.created_at FROM transcriptions t"
+        " JOIN recognition_runs rr ON rr.id = t.recognition_run_id"
+        " WHERE t.scan_id = ?",
+        (scan_id,),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == row[1]
+
+
 def test_old_idempotency_key_replays_its_original_run_after_rerun(tmp_path):
     calls = 0
 

@@ -43,11 +43,58 @@ def _category(symbol: str) -> str:
         if "'" in symbol or "," in symbol:
             return "octave"
         return "letter"
+    # A capital letter outside S R G M P D N is not sargam at all — it is the
+    # misread `validate_stf` flags loudly (the live eval that read notes as "B").
+    # It tokenizes as loose characters, so without this it would vanish into
+    # `layout` and never surface as the worst symbol class.
+    if len(symbol) == 1 and symbol.isascii() and symbol.isupper():
+        return "alien_letter"
+    # Orphaned marks left behind when a note token splits (e.g. `R_` -> `B` `_`).
+    if symbol in {"_", "^"}:
+        return "accidental"
+    if symbol in {"'", ","}:
+        return "octave"
     return "layout"
 
 
+def _note_aspects(token: str) -> tuple[str, str, str]:
+    """Split a note token into (letter, accidental marks, octave marks)."""
+    mods = token[1:]
+    return (
+        token[0],
+        "".join(sorted(ch for ch in mods if ch in "_^")),
+        "".join(sorted(ch for ch in mods if ch in "',")),
+    )
+
+
+def _attribute_replacement(raw_token: str, corrected_token: str, counts: Counter[str]) -> None:
+    """Charge a substitution to the aspect that actually differs.
+
+    Two note tokens differing only in an accidental are an accidental error, not
+    also a letter error — attributing to both categories inflates `letter` on
+    every accidental fix and hides which mark the model really struggles with.
+    """
+    if NOTE_RE.fullmatch(raw_token) and NOTE_RE.fullmatch(corrected_token):
+        raw_letter, raw_acc, raw_oct = _note_aspects(raw_token)
+        new_letter, new_acc, new_oct = _note_aspects(corrected_token)
+        if raw_letter != new_letter:
+            counts["letter"] += 1
+        if raw_acc != new_acc:
+            counts["accidental"] += 1
+        if raw_oct != new_oct:
+            counts["octave"] += 1
+        return
+    counts[_category(raw_token)] += 1
+    if _category(corrected_token) != _category(raw_token):
+        counts[_category(corrected_token)] += 1
+
+
 def correction_summary(raw_stf: dict[str, Any], corrected_stf: dict[str, Any]) -> dict[str, Any]:
-    """Return privacy-preserving counts; never include the STF or token text."""
+    """Return privacy-preserving counts; never include the STF or token text.
+
+    `categories` counts affected TOKENS (not edit blocks), so a sheet with forty
+    wrong letters outranks one with a single wrong barline.
+    """
     raw = _stf_tokens(raw_stf)
     corrected = _stf_tokens(corrected_stf)
     counts: Counter[str] = Counter()
@@ -56,10 +103,13 @@ def correction_summary(raw_stf: dict[str, Any], corrected_stf: dict[str, Any]) -
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             continue
-        affected = raw[i1:i2] + corrected[j1:j2]
         changed += max(i2 - i1, j2 - j1)
-        for category in {_category(token) for token in affected}:
-            counts[category] += 1
+        before, after = raw[i1:i2], corrected[j1:j2]
+        for raw_token, corrected_token in zip(before, after, strict=False):
+            _attribute_replacement(raw_token, corrected_token, counts)
+        # Length mismatch: the tail is a pure deletion or insertion.
+        for token in before[len(after) :] + after[len(before) :]:
+            counts[_category(token)] += 1
     return {
         "raw_token_count": len(raw),
         "corrected_token_count": len(corrected),
