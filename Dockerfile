@@ -10,15 +10,25 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.13-slim AS runtime
-
-# Pin the deployment toolchain to the same uv release used during development.
+# Resolve + install the backend virtualenv with uv in a throwaway stage. uv/uvx
+# are only needed to BUILD the venv, so they never reach the runtime image below —
+# keeping their Rust-dependency CVEs (e.g. quinn-proto) out of the container scan.
+# `only-system` forces the venv onto the base image's Python so its interpreter
+# symlinks stay valid once the venv is copied into the identical runtime base.
+FROM python:3.13-slim AS backend-build
 COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
-
+ENV UV_PYTHON_PREFERENCE=only-system
 WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
+
+FROM python:3.13-slim AS runtime
+
+WORKDIR /app/backend
+# Copy the ready-made virtualenv (no uv binary in this image). Same base image +
+# same path means the venv's interpreter symlinks and shebangs stay valid.
+COPY --from=backend-build /app/backend/.venv /app/backend/.venv
 COPY backend/app ./app
 COPY --from=frontend-build /build/frontend/dist /app/frontend-dist
 
