@@ -114,7 +114,14 @@ export function SongPage() {
           <li key={scan.id}>
             <Link to={`/songs/${songId}/pages/${scan.page_no}`}>
               <img src={scanThumbnailUrl(scan.id)} alt={`Page ${scan.page_no}`} loading="lazy" />
-              <span className="muted">Page {scan.page_no}</span>
+              <span className="scan-caption">
+                <span className="muted">Page {scan.page_no}</span>
+                {scan.status === "draft" ? (
+                  <span className="status-pill draft">Draft</span>
+                ) : scan.status === "new" ? (
+                  <span className="status-pill new">New</span>
+                ) : null}
+              </span>
             </Link>
           </li>
         ))}

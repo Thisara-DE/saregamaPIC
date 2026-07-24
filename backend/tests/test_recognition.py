@@ -106,10 +106,20 @@ def test_production_recognizer_requests_structured_output_and_handles_truncation
         usage=SimpleNamespace(input_tokens=10, output_tokens=20),
     )
 
-    class FakeMessages:
-        def create(self, **kwargs):
-            captured.update(kwargs)
+    class FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_final_message(self):
             return response
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            captured.update(kwargs)
+            return FakeStream()
 
     monkeypatch.setattr(
         anthropic,

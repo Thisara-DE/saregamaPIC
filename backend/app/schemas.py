@@ -33,6 +33,9 @@ class Scan(BaseModel):
     page_no: int
     content_type: str
     uploaded_at: str
+    # This page's transcription status: "new" (not recognized), "draft", or
+    # "reviewed". A freshly uploaded scan has no transcription yet, so "new".
+    status: str = "new"
 
 
 class Song(BaseModel):
@@ -48,6 +51,9 @@ class Song(BaseModel):
     # Lets the gallery link straight to the digital view, and disable that link,
     # without fetching every page's transcription.
     digital_page_no: int | None = None
+    # Gallery progress pill: "new" (nothing transcribed), "draft" (at least one
+    # page is a draft), or "reviewed" (every page reviewed — shown as no pill).
+    status: str = "new"
 
 
 class SongDetail(Song):

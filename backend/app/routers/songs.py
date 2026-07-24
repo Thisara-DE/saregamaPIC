@@ -23,12 +23,28 @@ MAX_IMAGE_BYTES = 30 * 1024 * 1024  # generous for high-res phone photos
 # cover_scan_id = first page, so the gallery can show a thumbnail per song.
 # digital_page_no = lowest page that has a transcription, so the gallery can link
 # straight to the digital view (and grey the link out) without a request per page.
+# status = at-a-glance progress for the gallery pill. Precedence draft > new >
+# reviewed so that "no pill" strictly means every page is reviewed:
+#   'draft'    — ANY page is a draft (outranks all; there is still work to do)
+#   'new'      — ANY page is un-recognized (no transcription yet), incl. a song
+#                with no pages at all — so a mix of reviewed + un-recognized
+#                pages still surfaces as New rather than masquerading as done
+#   'reviewed' — every page has a transcription and none is a draft (no pill)
 _SONG_SELECT = (
     "SELECT s.*,"
     " (SELECT COUNT(*) FROM scans WHERE song_id = s.id) AS scan_count,"
     " (SELECT id FROM scans WHERE song_id = s.id ORDER BY page_no LIMIT 1) AS cover_scan_id,"
     " (SELECT sc.page_no FROM scans sc JOIN transcriptions t ON t.scan_id = sc.id"
-    "  WHERE sc.song_id = s.id ORDER BY sc.page_no LIMIT 1) AS digital_page_no"
+    "  WHERE sc.song_id = s.id ORDER BY sc.page_no LIMIT 1) AS digital_page_no,"
+    " CASE"
+    "  WHEN EXISTS (SELECT 1 FROM scans sc JOIN transcriptions t ON t.scan_id = sc.id"
+    "   WHERE sc.song_id = s.id AND t.status = 'draft') THEN 'draft'"
+    "  WHEN EXISTS (SELECT 1 FROM scans sc WHERE sc.song_id = s.id"
+    "   AND NOT EXISTS (SELECT 1 FROM transcriptions t WHERE t.scan_id = sc.id)) THEN 'new'"
+    "  WHEN EXISTS (SELECT 1 FROM scans sc JOIN transcriptions t ON t.scan_id = sc.id"
+    "   WHERE sc.song_id = s.id) THEN 'reviewed'"
+    "  ELSE 'new'"
+    " END AS status"
     " FROM songs s"
 )
 
@@ -195,9 +211,13 @@ def delete_song(song_id: str, request: Request) -> Response:
 def get_song(song_id: str, request: Request) -> SongDetail:
     conn = _db(request)
     row = _song_row(conn, song_id, current_user_id(request))
+    # Per-page status so the detail grid can flag which page is a draft / not yet
+    # recognized. 'new' = no transcription for that scan (LEFT JOIN miss).
     scans = conn.execute(
-        "SELECT id, song_id, page_no, content_type, uploaded_at FROM scans"
-        " WHERE song_id = ? ORDER BY page_no",
+        "SELECT sc.id, sc.song_id, sc.page_no, sc.content_type, sc.uploaded_at,"
+        " COALESCE(t.status, 'new') AS status"
+        " FROM scans sc LEFT JOIN transcriptions t ON t.scan_id = sc.id"
+        " WHERE sc.song_id = ? ORDER BY sc.page_no",
         (song_id,),
     ).fetchall()
     return SongDetail(**dict(row), scans=[Scan(**dict(s)) for s in scans])

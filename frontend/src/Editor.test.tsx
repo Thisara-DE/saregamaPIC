@@ -14,6 +14,7 @@ const detail: SongDetail = {
   scan_count: 1,
   cover_scan_id: "scan1",
   digital_page_no: 1,
+  status: "draft",
   scans: [
     {
       id: "scan1",
@@ -21,6 +22,7 @@ const detail: SongDetail = {
       page_no: 1,
       content_type: "image/jpeg",
       uploaded_at: "2026-07-17T00:00:00Z",
+      status: "draft",
     },
   ],
 };

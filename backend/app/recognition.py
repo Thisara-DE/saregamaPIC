@@ -46,6 +46,15 @@ class RecognitionUnavailable(RuntimeError):
 # faint slur arcs; high enough that the dot-vs-dash (octave vs flat) distinction
 # survives, low enough to bound cost.
 _MAX_EDGE = 2600
+# Adaptive thinking counts toward max_tokens, so a dense full-page sheet can spend
+# most of a small budget on reasoning and then truncate the STF mid-output
+# (stop_reason "max_tokens"). 8000 was too tight — a sheet with many lines + lyrics
+# hit the cap. Opus supports up to 128K output and cost accrues only on tokens
+# actually generated, so a generous ceiling is safe. We stream and assemble the
+# final message (below) so the SDK doesn't refuse a high cap and the long call
+# keeps the connection active — Railway drops idle long-running responses, which is
+# exactly what the client-side recognition recovery exists to survive.
+_MAX_OUTPUT_TOKENS = 32000
 PREPROCESSING_VERSION = "grayscale-autocontrast-2600-v1"
 PROMPT_VERSION = "stf-v1.1-2026-07-24-msharp"
 
@@ -318,9 +327,12 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
         b64 = base64.standard_b64encode(jpeg).decode("ascii")
         client = anthropic.Anthropic(api_key=api_key)
         try:
-            resp = client.messages.create(
+            # Stream and assemble the final message: with a high max_tokens the SDK
+            # refuses a non-streaming call it estimates could outlive the HTTP
+            # timeout, and streaming keeps the connection active for the long run.
+            with client.messages.stream(
                 model=model,
-                max_tokens=8000,
+                max_tokens=_MAX_OUTPUT_TOKENS,
                 thinking={"type": "adaptive"},
                 output_config={
                     "format": {
@@ -345,7 +357,8 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
                         ],
                     }
                 ],
-            )
+            ) as stream:
+                resp = stream.get_final_message()
         except anthropic.AnthropicError as e:  # network/auth/rate-limit → clean 503
             raise RecognitionUnavailable(
                 f"Claude API call failed: {e}", code="api_error"

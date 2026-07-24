@@ -401,6 +401,66 @@ def test_song_reports_the_first_page_holding_a_digital_version(client):
     ] == 2
 
 
+def test_song_status_tracks_draft_and_reviewed_pages(client):
+    """The gallery pill is driven by this field, precedence draft > new >
+    reviewed: 'draft' while any page is a draft (even beside reviewed pages),
+    'new' while any page is still un-recognized, and 'reviewed' — the no-pill
+    state — only once every page is reviewed."""
+    created = client.post(
+        "/api/songs/import", data={"title": "Two pages"}, files=_page_file()
+    ).json()
+    song_id = created["song"]["id"]
+    client.post(f"/api/songs/{song_id}/scans", files=_page_file())
+
+    def status() -> str:
+        return client.get(f"/api/songs/{song_id}").json()["status"]
+
+    # Nothing transcribed yet.
+    assert status() == "new"
+
+    pages = client.get(f"/api/songs/{song_id}").json()["scans"]
+    first = next(s for s in pages if s["page_no"] == 1)
+    second = next(s for s in pages if s["page_no"] == 2)
+
+    def scan_status() -> dict[int, str]:
+        detail = client.get(f"/api/songs/{song_id}").json()
+        return {s["page_no"]: s["status"] for s in detail["scans"]}
+
+    # Both pages start un-recognized.
+    assert scan_status() == {1: "new", 2: "new"}
+
+    # A draft on one page flips the whole song to 'draft'.
+    body = {"stf": {"header": {}, "lines": []}, "status": "draft"}
+    client.put(f"/api/scans/{first['id']}/transcription", json=body)
+    assert status() == "draft"
+
+    # Reviewing that page while the other is still un-recognized stays 'new':
+    # an un-recognized page must not hide behind a reviewed sibling, so that a
+    # song with no pill strictly means every page is reviewed.
+    client.put(
+        f"/api/scans/{first['id']}/transcription",
+        json={"stf": {"header": {}, "lines": []}, "status": "reviewed"},
+    )
+    assert status() == "new"
+    assert scan_status() == {1: "reviewed", 2: "new"}
+
+    # A draft anywhere outranks both a reviewed and an un-recognized sibling.
+    client.put(f"/api/scans/{second['id']}/transcription", json=body)
+    assert status() == "draft"
+    # The detail page pinpoints WHICH page is the draft vs the reviewed one.
+    assert scan_status() == {1: "reviewed", 2: "draft"}
+
+    # Every page reviewed → the pill disappears.
+    client.put(
+        f"/api/scans/{second['id']}/transcription",
+        json={"stf": {"header": {}, "lines": []}, "status": "reviewed"},
+    )
+    assert status() == "reviewed"
+    assert [s for s in client.get("/api/songs").json() if s["id"] == song_id][0][
+        "status"
+    ] == "reviewed"
+
+
 def test_ephemeral_data_dir_is_detected_only_for_the_container_path(tmp_path):
     """Deploys wipe an unmounted /data silently — the app boots fine and simply
     has no songs, scans, or sessions. This is the only signal there is."""

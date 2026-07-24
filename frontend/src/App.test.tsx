@@ -18,6 +18,7 @@ const song: Song = {
   scan_count: 2,
   cover_scan_id: "scan1",
   digital_page_no: null,
+  status: "new",
 };
 
 const songs: Song[] = [song];
@@ -31,6 +32,7 @@ const detail: SongDetail = {
       page_no: 1,
       content_type: "image/jpeg",
       uploaded_at: "2026-07-17T00:00:00Z",
+      status: "new",
     },
     {
       id: "scan2",
@@ -38,6 +40,7 @@ const detail: SongDetail = {
       page_no: 2,
       content_type: "image/jpeg",
       uploaded_at: "2026-07-17T00:00:00Z",
+      status: "new",
     },
   ],
 };

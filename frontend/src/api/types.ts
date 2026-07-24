@@ -14,6 +14,9 @@ export interface Song {
   // Lets the gallery link straight to the digital view, and disable that link,
   // without fetching every page's transcription.
   digital_page_no: number | null;
+  // Gallery progress pill: "new" (nothing transcribed), "draft" (at least one
+  // page is a draft), or "reviewed" (every page reviewed — shown as no pill).
+  status: "new" | "draft" | "reviewed";
 }
 
 export interface Scan {
@@ -22,6 +25,9 @@ export interface Scan {
   page_no: number;
   content_type: string;
   uploaded_at: string;
+  // This page's transcription status: "new" (not recognized), "draft", or
+  // "reviewed". A freshly uploaded scan has no transcription yet, so "new".
+  status: "new" | "draft" | "reviewed";
 }
 
 export interface SongDetail extends Song {

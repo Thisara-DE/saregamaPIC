@@ -215,6 +215,16 @@ export function SongsPage() {
             </span>
           );
 
+          // Draft outranks New: a draft page is more actionable than an
+          // untranscribed one. A fully reviewed song shows no pill. Reuses the
+          // editor's .status-pill vocabulary for a consistent look.
+          const statusPill =
+            song.status === "draft" ? (
+              <span className="status-pill draft">Draft</span>
+            ) : song.status === "new" ? (
+              <span className="status-pill new">New</span>
+            ) : null;
+
           return (
             <li key={song.id} className="song-card">
               {renamingId === song.id ? (
@@ -258,7 +268,10 @@ export function SongsPage() {
               ) : (
                 <Link className="song-row" to={`/songs/${song.id}`}>
                   {cover}
-                  <span className="song-title">{song.title || "Untitled song"}</span>
+                  <span className="song-heading">
+                    <span className="song-title">{song.title || "Untitled song"}</span>
+                    {statusPill}
+                  </span>
                   <span className="muted">
                     {song.scan_count} {song.scan_count === 1 ? "page" : "pages"}
                   </span>
