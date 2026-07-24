@@ -13,7 +13,7 @@ RUN npm run build
 FROM python:3.13-slim AS runtime
 
 # Pin the deployment toolchain to the same uv release used during development.
-COPY --from=ghcr.io/astral-sh/uv:0.11.23 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
 
 WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
