@@ -253,6 +253,42 @@ describe("EditorPage", () => {
   });
 });
 
+describe("EditorPage title editing", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("renames the song on blur when the title changed, and skips the call when it didn't", async () => {
+    const untitled = { ...detail, title: "" };
+    const renamed = { id: "abc123", title: "Sudu Nelum", notes: "", created_at: detail.created_at };
+    const fetchMock = routeFetch({
+      "GET /api/songs/abc123": untitled,
+      "GET /api/scans/scan1/transcription": transcription,
+      "PATCH /api/songs/abc123": renamed,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    const titleInput = await screen.findByRole("textbox", { name: "Song title" });
+
+    // Blur without editing: no rename request fires.
+    fireEvent.blur(titleInput);
+    expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit)?.method === "PATCH")).toBe(
+      false,
+    );
+
+    // Type a name and blur: exactly one PATCH carrying the new title.
+    fireEvent.change(titleInput, { target: { value: "Sudu Nelum" } });
+    fireEvent.blur(titleInput);
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PATCH");
+      expect(patch).toBeTruthy();
+      expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ title: "Sudu Nelum" });
+    });
+  });
+});
+
 describe("EditorPage save confirmation", () => {
   beforeEach(() => vi.restoreAllMocks());
 

@@ -153,6 +153,39 @@ describe("App", () => {
     });
   });
 
+  it("keeps the menu open when a menu item is pressed (pointerdown must not dismiss it)", async () => {
+    // Regression: the outside-tap dismiss listened on pointerdown and fired for
+    // taps INSIDE the menu too. Pointerdown precedes click, so it tore the menu
+    // down before the item's click could land — every option silently did
+    // nothing. A real tap is pointerdown → click; the click-only tests missed it.
+    vi.stubGlobal("fetch", mockFetchJson([{ ...song, title: "", digital_page_no: null }]));
+    renderAt("/");
+    await screen.findByText("Untitled song");
+
+    fireEvent.click(screen.getByRole("button", { name: /Actions for Untitled song/ }));
+    const renameItem = screen.getByRole("menuitem", { name: "Rename" });
+    // Faithfully replay the browser's order: pointerdown, then the click.
+    fireEvent.pointerDown(renameItem);
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument(); // survived
+    fireEvent.click(renameItem);
+
+    // The inline rename form opened, proving the item's click actually ran.
+    expect(screen.getByLabelText("Song name")).toBeInTheDocument();
+  });
+
+  it("closes the menu on a tap outside it", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(songs));
+    renderAt("/");
+    await screen.findByText("Test Sinhala Song");
+
+    fireEvent.click(screen.getByRole("button", { name: /Actions for Test Sinhala Song/ }));
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => {
+      expect(screen.queryByRole("menuitem", { name: "Rename" })).not.toBeInTheDocument();
+    });
+  });
+
   it("disables the digital menu options until there is something to open", async () => {
     const untranscribed: Song = { ...song, digital_page_no: null };
     vi.stubGlobal("fetch", mockFetchJson([untranscribed]));

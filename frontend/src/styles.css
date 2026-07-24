@@ -710,6 +710,25 @@ button:disabled {
   }
 }
 
+.editor-title-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
+.editor-title-field input {
+  font: inherit;
+  font-size: 1rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--muted);
+  border-radius: 0.4rem;
+  background: var(--card);
+  color: var(--fg);
+}
+
 .stf-header {
   display: flex;
   flex-wrap: wrap;

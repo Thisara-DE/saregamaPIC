@@ -43,7 +43,16 @@ export function SongsPage() {
   useEffect(() => {
     if (menuFor === null) return;
     function dismiss(event: Event) {
-      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") setMenuFor(null);
+        return;
+      }
+      // A pointerdown INSIDE the open menu (its ⋯ button or an item) must not
+      // close it here: that fires before the item's click, so tearing the menu
+      // down on pointerdown unmounts the button and the click never lands — the
+      // items would silently do nothing. Let those handlers run; close only on
+      // a tap that lands outside.
+      if (event.target instanceof Element && event.target.closest(".song-menu-wrap")) return;
       setMenuFor(null);
     }
     document.addEventListener("pointerdown", dismiss);

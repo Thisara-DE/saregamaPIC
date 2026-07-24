@@ -5,6 +5,7 @@ import {
   getSong,
   getTranscription,
   recognizeScan,
+  renameSong,
   saveTranscription,
   scanPreviewUrl,
 } from "../api/client";
@@ -42,6 +43,10 @@ export function EditorPage() {
   const page = Number(pageNo);
 
   const [title, setTitle] = useState("");
+  // The title persisted on the server. Blur compares against this so a rename
+  // fires only when the reader actually changed it, never on a bare tab-out.
+  const [savedTitle, setSavedTitle] = useState("");
+  const [titleBusy, setTitleBusy] = useState(false);
   const [scanId, setScanId] = useState<string | null>(null);
   const [stf, setStf] = useState<Stf>(EMPTY_STF);
   const [status, setStatus] = useState<TranscriptionStatus>("draft");
@@ -87,6 +92,7 @@ export function EditorPage() {
         const song = await getSong(songId);
         if (cancelled) return;
         setTitle(song.title);
+        setSavedTitle(song.title);
         const scan = song.scans.find((s) => s.page_no === page);
         if (!scan) {
           setError(`Page ${page} not found.`);
@@ -125,6 +131,7 @@ export function EditorPage() {
       apply(await recognizeScan(scanId, () => setRecognitionRecovering(true)));
       const refreshedSong = await getSong(songId);
       setTitle(refreshedSong.title);
+      setSavedTitle(refreshedSong.title);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -149,6 +156,36 @@ export function EditorPage() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  // The title is song-level, so it saves on its own the moment the field loses
+  // focus — no need to press "Mark reviewed" (a page-level action) to keep a
+  // name. A blank title is not a valid rename (the backend rejects it, and it
+  // is the untitled state a reader is trying to leave), so we snap back to the
+  // last saved value instead of firing a doomed request.
+  async function handleTitleBlur() {
+    const next = title.trim();
+    if (next === savedTitle) {
+      if (next !== title) setTitle(next); // tidy stray whitespace, no request
+      return;
+    }
+    if (!next) {
+      setTitle(savedTitle);
+      return;
+    }
+    setTitleBusy(true);
+    setError(null);
+    try {
+      const updated = await renameSong(songId, next);
+      setTitle(updated.title);
+      setSavedTitle(updated.title);
+    } catch (e) {
+      // Keep the typed value so the reader can fix and retry; savedTitle stays
+      // put, so the next blur attempts the rename again.
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTitleBusy(false);
     }
   }
 
@@ -235,6 +272,19 @@ export function EditorPage() {
               or start typing below.
             </p>
           )}
+
+          <label className="editor-title-field">
+            Song title
+            <input
+              value={title}
+              maxLength={200}
+              placeholder="Untitled — name it here or read it from the sheet"
+              aria-label="Song title"
+              disabled={busy === "load" || titleBusy}
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => void handleTitleBlur()}
+            />
+          </label>
 
           <fieldset className="stf-header">
             <legend>Header</legend>
