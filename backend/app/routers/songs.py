@@ -6,7 +6,7 @@ import uuid
 from fastapi import APIRouter, Form, HTTPException, Request, Response, UploadFile
 
 from ..auth import current_user_id
-from ..schemas import Scan, Song, SongCreate, SongDetail, SongImport
+from ..schemas import Scan, Song, SongCreate, SongDetail, SongImport, SongUpdate
 from ..security import enforce_limit, security_event
 from ..storage import (
     InvalidImage,
@@ -21,10 +21,14 @@ router = APIRouter()
 MAX_IMAGE_BYTES = 30 * 1024 * 1024  # generous for high-res phone photos
 
 # cover_scan_id = first page, so the gallery can show a thumbnail per song.
+# digital_page_no = lowest page that has a transcription, so the gallery can link
+# straight to the digital view (and grey the link out) without a request per page.
 _SONG_SELECT = (
     "SELECT s.*,"
     " (SELECT COUNT(*) FROM scans WHERE song_id = s.id) AS scan_count,"
-    " (SELECT id FROM scans WHERE song_id = s.id ORDER BY page_no LIMIT 1) AS cover_scan_id"
+    " (SELECT id FROM scans WHERE song_id = s.id ORDER BY page_no LIMIT 1) AS cover_scan_id,"
+    " (SELECT sc.page_no FROM scans sc JOIN transcriptions t ON t.scan_id = sc.id"
+    "  WHERE sc.song_id = s.id ORDER BY sc.page_no LIMIT 1) AS digital_page_no"
     " FROM songs s"
 )
 
@@ -145,6 +149,20 @@ def list_songs(request: Request) -> list[Song]:
         (current_user_id(request),),
     ).fetchall()
     return [Song(**dict(r)) for r in rows]
+
+
+@router.patch("/songs/{song_id}", response_model=Song)
+def rename_song(song_id: str, body: SongUpdate, request: Request) -> Song:
+    """Rename a song. The only way to title a song recognition left blank."""
+    conn = _db(request)
+    owner_id = current_user_id(request)
+    _song_row(conn, song_id, owner_id)  # 404 for unknown or another user's song
+    conn.execute(
+        "UPDATE songs SET title = ? WHERE id = ? AND owner_id = ?",
+        (body.title, song_id, owner_id),
+    )
+    conn.commit()
+    return Song(**dict(_song_row(conn, song_id, owner_id)))
 
 
 @router.delete("/songs/{song_id}", status_code=204)

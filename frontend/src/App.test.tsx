@@ -17,6 +17,7 @@ const song: Song = {
   created_at: "2026-07-17T00:00:00Z",
   scan_count: 2,
   cover_scan_id: "scan1",
+  digital_page_no: null,
 };
 
 const songs: Song[] = [song];
@@ -41,18 +42,46 @@ const detail: SongDetail = {
   ],
 };
 
-function mockFetchJson(body: unknown) {
+// `transcription` omitted = the page has none yet, so the endpoint 404s. Without
+// this the mock answered the transcription request with the SongDetail body,
+// which no longer resembles a Transcription closely enough to be safe.
+function mockFetchJson(body: unknown, transcription?: unknown) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
-    const responseBody = url === "/api/auth/me" ? authUser : body;
+    if (url === "/api/auth/me") return Promise.resolve(Response.json(authUser));
+    if (url.endsWith("/transcription")) {
+      return Promise.resolve(
+        transcription === undefined
+          ? new Response(JSON.stringify({ detail: "No transcription for this scan yet" }), {
+              status: 404,
+              headers: { "Content-Type": "application/json" },
+            })
+          : Response.json(transcription),
+      );
+    }
     return Promise.resolve(
-      new Response(JSON.stringify(responseBody), {
+      new Response(JSON.stringify(body), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
     );
   });
 }
+
+const digitalTranscription = {
+  id: "t1",
+  scan_id: "scan2",
+  status: "reviewed",
+  stf: {
+    header: { concert_scale: "G", alto_scale: "E", beat: "4/4" },
+    lines: [{ n: 1, kind: "sargam", text: "S R - G | P D N S'" }],
+  },
+  warnings: [],
+  model: null,
+  input_tokens: null,
+  output_tokens: null,
+  updated_at: "2026-07-23T00:00:00Z",
+};
 
 function renderAt(path: string) {
   return render(
@@ -87,6 +116,82 @@ describe("App", () => {
       "href",
       "/songs/abc123",
     );
+  });
+
+  it("renames a song recognition left untitled", async () => {
+    // The gap this closes: a song recognition never named had no title editor
+    // anywhere in the app, so it was stuck as "Untitled song" permanently.
+    const untitled: Song = { ...song, title: "", digital_page_no: null };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/auth/me") return Promise.resolve(Response.json(authUser));
+      if (init?.method === "PATCH") {
+        const sent = JSON.parse(String(init.body)) as { title: string };
+        return Promise.resolve(Response.json({ ...untitled, title: sent.title }));
+      }
+      return Promise.resolve(Response.json([untitled]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt("/");
+
+    await screen.findByText("Untitled song");
+    fireEvent.click(screen.getByRole("button", { name: /Actions for Untitled song/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    fireEvent.change(screen.getByLabelText("Song name"), {
+      target: { value: "  Tharuda Nidana  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Tharuda Nidana");
+    const patch = fetchMock.mock.calls.find(
+      (call) => (call[1] as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patch?.[0]).toBe("/api/songs/abc123");
+    // Trimmed client-side before it is sent; the server trims again as defence.
+    expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toEqual({
+      title: "Tharuda Nidana",
+    });
+  });
+
+  it("disables the digital menu options until there is something to open", async () => {
+    const untranscribed: Song = { ...song, digital_page_no: null };
+    vi.stubGlobal("fetch", mockFetchJson([untranscribed]));
+    renderAt("/");
+    await screen.findByText("Test Sinhala Song");
+
+    fireEvent.click(screen.getByRole("button", { name: /Actions for Test Sinhala Song/ }));
+    expect(screen.getByRole("menuitem", { name: "Open digital version" })).toBeDisabled();
+    // Editing stays available — that is how the first transcription gets made.
+    expect(screen.getByRole("menuitem", { name: "Edit digital version" })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: "Delete song" })).toBeInTheDocument();
+  });
+
+  it("opens the digital version straight from the song card once one exists", async () => {
+    // The gallery lists songs; the viewer then needs the song DETAIL, so this
+    // mock has to answer both shapes rather than one body for every URL.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") return Promise.resolve(Response.json(authUser));
+        if (url === "/api/songs") {
+          return Promise.resolve(Response.json([{ ...song, digital_page_no: 2 }]));
+        }
+        if (url.endsWith("/transcription")) {
+          return Promise.resolve(Response.json(digitalTranscription));
+        }
+        return Promise.resolve(Response.json({ ...detail, digital_page_no: 2 }));
+      }),
+    );
+    renderAt("/");
+    await screen.findByText("Test Sinhala Song");
+
+    fireEvent.click(screen.getByRole("button", { name: /Actions for Test Sinhala Song/ }));
+    const open = screen.getByRole("menuitem", { name: "Open digital version" });
+    expect(open).toBeEnabled();
+    fireEvent.click(open);
+    // Lands on the page that actually holds the transcription, not page 1.
+    await screen.findByText("Test Sinhala Song — 2 / 2");
   });
 
   it("starts a new song with an image and an optional title", async () => {
@@ -146,6 +251,27 @@ describe("App", () => {
     expect(page1).toHaveAttribute("src", "/api/scans/scan1/thumbnail");
     expect(page1.closest("a")).toHaveAttribute("href", "/songs/abc123/pages/1");
     expect(screen.getByRole("button", { name: /Photograph sheet/ })).toBeInTheDocument();
+  });
+
+  it("viewer opens on the digital version when the page has one", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Test Sinhala Song — 2 / 2");
+    // Reaching the page should not cost a second tap to see the notation.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Digital" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    expect(screen.getByText("Concert G")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Page 2 of/ })).not.toBeInTheDocument();
+    // The photo is still one tap away — the fidelity rule's original.
+    fireEvent.click(screen.getByRole("button", { name: "Original" }));
+    expect(screen.getByRole("img", { name: /Page 2 of/ })).toHaveAttribute(
+      "src",
+      "/api/scans/scan2/image",
+    );
   });
 
   it("viewer shows the ORIGINAL photo, not the thumbnail", async () => {

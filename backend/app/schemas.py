@@ -1,11 +1,30 @@
 """API request/response models (pydantic). Keep in sync with frontend/src/api/types.ts."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SongCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     notes: str = Field(default="", max_length=2000)
+
+
+class SongUpdate(BaseModel):
+    """Rename an existing song.
+
+    A blank title is rejected: an untitled song that recognition never named has
+    no other way back to a real name, and silently accepting "" would strand it
+    again.
+    """
+
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        title = value.strip()
+        if not title:
+            raise ValueError("title cannot be blank")
+        return title
 
 
 class Scan(BaseModel):
@@ -25,6 +44,10 @@ class Song(BaseModel):
     # First page's scan id (None when the song has no pages yet) — the
     # gallery uses it to show a cover thumbnail without fetching details.
     cover_scan_id: str | None = None
+    # First page that has a transcription (None when nothing is transcribed yet).
+    # Lets the gallery link straight to the digital view, and disable that link,
+    # without fetching every page's transcription.
+    digital_page_no: int | None = None
 
 
 class SongDetail(Song):

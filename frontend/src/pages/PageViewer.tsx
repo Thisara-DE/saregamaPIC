@@ -58,7 +58,13 @@ export function PageViewer() {
     let cancelled = false;
     getTranscription(scan.id)
       .then((t) => {
-        if (!cancelled) setTranscription(t);
+        if (cancelled) return;
+        setTranscription(t);
+        // Open on the digital version when there is one to show — that is what
+        // the page is usually opened for. An empty transcription would be a
+        // blank screen, so fall back to the photo. The toggle only renders once
+        // this resolves, so this can never overwrite a user's choice.
+        if (t.stf.lines.length > 0) setView("digital");
       })
       .catch((e: unknown) => {
         // 404 = nothing transcribed yet; leave Digital disabled, surface others.

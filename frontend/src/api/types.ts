@@ -10,6 +10,10 @@ export interface Song {
   // First page's scan id (null when the song has no pages yet) — the
   // gallery uses it to show a cover thumbnail without fetching details.
   cover_scan_id: string | null;
+  // First page that has a transcription (null when nothing is transcribed yet).
+  // Lets the gallery link straight to the digital view, and disable that link,
+  // without fetching every page's transcription.
+  digital_page_no: number | null;
 }
 
 export interface Scan {

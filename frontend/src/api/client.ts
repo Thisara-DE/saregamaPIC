@@ -88,6 +88,14 @@ export function uploadScan(songId: string, file: File): Promise<Scan> {
   });
 }
 
+export function renameSong(id: string, title: string): Promise<Song> {
+  return request<Song>(`/api/songs/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
 export function deleteSong(id: string): Promise<void> {
   return request<void>(`/api/songs/${id}`, { method: "DELETE" });
 }
@@ -103,8 +111,17 @@ export function getTranscription(scanId: string): Promise<Transcription> {
 }
 
 const RECOGNITION_RECOVERY_POLL_MS = 2_000;
-const RECOGNITION_RECOVERY_TIMEOUT_MS = 90_000;
+// Budget for the recovery poll ALONE, measured from the interruption. It is not
+// a budget for the whole call: recognition itself regularly runs past this, and
+// timing from the start of the call meant a slow recognition — precisely the
+// case recovery exists for — reached its first retry with the budget spent.
+const RECOGNITION_RECOVERY_TIMEOUT_MS = 240_000;
 const RECOGNITION_IN_PROGRESS = "Recognition with this Idempotency-Key is in progress";
+// Giving up on the poll does not mean the work failed: the server is still
+// writing the draft. Say that, rather than surfacing the internal 409 text.
+const RECOGNITION_STILL_RUNNING =
+  "Recognition is taking longer than usual, but it is still running. " +
+  "Reopen this page shortly and the draft should be waiting.";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -122,7 +139,7 @@ export async function recognizeScan(
 ): Promise<Transcription> {
   const idempotencyKey = crypto.randomUUID();
   const path = `/api/scans/${scanId}/recognize`;
-  const startedAt = Date.now();
+  let recoveringSince = 0;
   let recovering = false;
 
   while (true) {
@@ -138,13 +155,17 @@ export async function recognizeScan(
         error.message === RECOGNITION_IN_PROGRESS;
       const networkFailure = error instanceof TypeError;
 
-      if ((!networkFailure && !stillRunning) || Date.now() - startedAt >= RECOGNITION_RECOVERY_TIMEOUT_MS) {
+      // A real failure (503, a 404, a key reused for another scan) surfaces as-is.
+      if (!networkFailure && !stillRunning) {
         throw error;
       }
       const retryImmediately = networkFailure && !recovering;
       if (!recovering) {
         recovering = true;
+        recoveringSince = Date.now();
         onRecovering?.();
+      } else if (Date.now() - recoveringSince >= RECOGNITION_RECOVERY_TIMEOUT_MS) {
+        throw new Error(RECOGNITION_STILL_RUNNING);
       }
       // A network failure may occur just as the backend commits, so retry it
       // immediately once. In-progress responses then settle into a quiet poll.

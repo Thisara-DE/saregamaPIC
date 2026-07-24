@@ -1,5 +1,6 @@
 """App factory."""
 
+import logging
 import sqlite3
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -29,6 +30,9 @@ from .config import APP_VERSION, Settings
 from .recognition import Recognizer, make_recognizer
 from .routers import learning, scans, songs, transcriptions
 from .schemas import Health
+from .storage import data_dir_is_ephemeral
+
+logger = logging.getLogger("saregamapic")
 
 
 class SpaStaticFiles(StaticFiles):
@@ -60,6 +64,16 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.validate_auth()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        if data_dir_is_ephemeral(settings.data_dir):
+            # Loud, because the symptom is silent: the app starts perfectly and
+            # simply has no songs, scans, or sessions from before the deploy.
+            logger.error(
+                "%s is not a mounted volume — the database, the original scans, and "
+                "every signed-in session will be discarded on the next deploy. "
+                "Attach a persistent volume to this service at %s.",
+                settings.data_dir,
+                settings.data_dir,
+            )
         db.migrate(settings.db_path)
         conn = db.connect(settings.db_path)
         try:

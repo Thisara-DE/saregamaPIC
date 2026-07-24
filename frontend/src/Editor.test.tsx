@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -13,6 +13,7 @@ const detail: SongDetail = {
   created_at: "2026-07-17T00:00:00Z",
   scan_count: 1,
   cover_scan_id: "scan1",
+  digital_page_no: 1,
   scans: [
     {
       id: "scan1",
@@ -155,6 +156,51 @@ describe("recognition network recovery", () => {
     expect(new Set(keys).size).toBe(1);
     vi.useRealTimers();
   });
+
+  it("starts the recovery budget at the interruption, not at the start of the call", async () => {
+    // The budget used to be measured from the start of the call, so a slow
+    // recognition — the exact case recovery exists for — arrived at its first
+    // retry with nothing left and gave up without polling once.
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(300_000); // recognition ran well past the old budget
+        throw new TypeError("Failed to fetch");
+      })
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(transcription), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = recognizeScan("scan1");
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toEqual(transcription);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("says recognition is still running rather than leaking the idempotency error", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ detail: "Recognition with this Idempotency-Key is in progress" }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = recognizeScan("scan1");
+    const assertion = expect(result).rejects.toThrow(/still running/i);
+    await vi.runAllTimersAsync();
+    await assertion;
+    await expect(result.catch((e: Error) => e.message)).resolves.not.toMatch(/Idempotency-Key/);
+    vi.useRealTimers();
+  });
 });
 
 describe("EditorPage", () => {
@@ -204,5 +250,65 @@ describe("EditorPage", () => {
       ).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: "Recognize" })).toBeInTheDocument();
+  });
+});
+
+describe("EditorPage save confirmation", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("offers the digital version right after a save, and drops it once editing resumes", async () => {
+    // The editor shows one line at a time, so whether the sheet ALIGNS is only
+    // visible in the digital view. Without this the reader has to walk back out
+    // to the song page and toggle to see the thing they just corrected.
+    const reviewed = { ...transcription, status: "reviewed" as const };
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        "GET /api/songs/abc123": detail,
+        "GET /api/scans/scan1/transcription": transcription,
+        "PUT /api/scans/scan1/transcription": reviewed,
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByDisplayValue("S R_ M^ S'");
+    expect(screen.queryByRole("button", { name: /digital version/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }));
+
+    expect(await screen.findByText("Marked reviewed.")).toBeInTheDocument();
+    const toDigital = screen.getByRole("button", { name: /See the digital version/ });
+    fireEvent.click(toDigital);
+    // Straight to the viewer for this page, which now opens on the digital view.
+    await screen.findByText((text) => text.includes("— 1 /"));
+  });
+
+  it("clears the save confirmation as soon as a line changes", async () => {
+    const reviewed = { ...transcription, status: "reviewed" as const };
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        "GET /api/songs/abc123": detail,
+        "GET /api/scans/scan1/transcription": transcription,
+        "PUT /api/scans/scan1/transcription": reviewed,
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    const line = await screen.findByDisplayValue("S R_ M^ S'");
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    expect(await screen.findByText("Draft saved.")).toBeInTheDocument();
+
+    // A stale "saved" banner over unsaved edits would be a lie.
+    fireEvent.change(line, { target: { value: "S R_ M^ S' G" } });
+    await waitFor(() => {
+      expect(screen.queryByText("Draft saved.")).not.toBeInTheDocument();
+    });
   });
 });

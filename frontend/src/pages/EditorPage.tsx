@@ -53,6 +53,7 @@ export function EditorPage() {
   const [hasTranscription, setHasTranscription] = useState(false);
   const [busy, setBusy] = useState<"load" | "recognize" | "save" | null>("load");
   const [recognitionRecovering, setRecognitionRecovering] = useState(false);
+  const [saved, setSaved] = useState<{ status: TranscriptionStatus; stf: Stf } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The line whose mark bar is showing, and a handle on its focused <input> so
   // a bar tap can read/restore the caret without the input losing focus.
@@ -136,8 +137,14 @@ export function EditorPage() {
     if (!scanId) return;
     setBusy("save");
     setError(null);
+    setSaved(null);
     try {
-      apply(await saveTranscription(scanId, stf, next));
+      const result = await saveTranscription(scanId, stf, next);
+      apply(result);
+      // Pin the confirmation to the exact STF that was saved. Every edit helper
+      // builds a new object, so the banner clears itself the moment the reader
+      // changes anything and it can never advertise a stale save.
+      setSaved({ status: next, stf: result.stf });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -361,6 +368,21 @@ export function EditorPage() {
               Mark reviewed
             </button>
           </div>
+
+          {/* The editor shows one line at a time, so alignment across the whole
+              sheet only becomes visible in the digital view. Offer it right here
+              rather than making the reader walk back out through the song page. */}
+          {saved && saved.stf === stf && (
+            <div className="save-confirm" role="status">
+              <span>{saved.status === "reviewed" ? "Marked reviewed." : "Draft saved."}</span>
+              <button
+                className="button-link"
+                onClick={() => navigate(`/songs/${songId}/pages/${page}`)}
+              >
+                See the digital version →
+              </button>
+            </div>
+          )}
 
           {metrics?.model && (
             <p className="muted metrics">

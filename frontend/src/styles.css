@@ -232,6 +232,124 @@ button:disabled {
   text-decoration: none;
 }
 
+/* The card is the positioning context for the ⋯ menu, which sits OUTSIDE the
+   row's <Link> so tapping it never navigates. */
+.song-card {
+  position: relative;
+}
+
+/* Leave room for the menu button so a long title never slides under it. */
+.song-card .song-row {
+  padding-right: 3.4rem;
+}
+
+.song-menu-wrap {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+}
+
+/* 2.75rem = 44px: the minimum comfortable touch target, and this app is used
+   on a tablet far more than with a mouse. */
+.song-menu-button {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.song-menu-button:hover,
+.song-menu-button[aria-expanded="true"] {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.song-menu {
+  position: absolute;
+  top: 2.9rem;
+  right: 0;
+  z-index: 20;
+  min-width: 13rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  border-radius: 0.6rem;
+  background: var(--card);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+}
+
+.song-menu button {
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.4rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.song-menu button:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.song-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* Delete sits last, fenced off by a rule so it is not a neighbour-miss away
+   from the harmless items above it. */
+.song-menu .danger-item {
+  color: var(--error);
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--bg);
+  border-radius: 0 0 0.4rem 0.4rem;
+}
+
+.song-rename {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0 0.6rem 0.6rem 4.35rem;
+  margin-top: -0.4rem;
+}
+
+.song-rename input {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.save-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.6rem;
+  background: var(--card);
+  color: var(--muted);
+}
+
 .song-cover {
   width: 3rem;
   height: 3rem;

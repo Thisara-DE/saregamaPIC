@@ -1,6 +1,7 @@
 """End-to-end API tests against a temp data dir (real SQLite, real files)."""
 
 import io
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +9,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
-from app.storage import preview_path, thumbnail_path
+from app.storage import data_dir_is_ephemeral, preview_path, thumbnail_path
 
 
 def _valid_png() -> bytes:
@@ -353,3 +354,68 @@ def test_cover_scan_id(client):
     _upload(client, song_id, _jpeg_bytes(40, 40))
     listed = client.get("/api/songs").json()
     assert next(s for s in listed if s["id"] == song_id)["cover_scan_id"] == first["id"]
+
+
+def _page_file() -> dict:
+    return {"file": ("page.png", io.BytesIO(PNG_1PX), "image/png")}
+
+
+def test_rename_song_sets_a_title_recognition_left_blank(client):
+    """A song recognition never named had no way back to a real name — that is
+    the gap this closes, so start from a blank title."""
+    song = client.post("/api/songs/import", data={"title": ""}, files=_page_file()).json()["song"]
+    assert song["title"] == ""
+
+    renamed = client.patch(f"/api/songs/{song['id']}", json={"title": "  Tharuda Nidana  "})
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Tharuda Nidana"  # surrounding space trimmed
+    assert client.get(f"/api/songs/{song['id']}").json()["title"] == "Tharuda Nidana"
+
+    # Blank or whitespace-only would strand the song again.
+    assert client.patch(f"/api/songs/{song['id']}", json={"title": "   "}).status_code == 422
+    assert client.patch(f"/api/songs/{song['id']}", json={"title": ""}).status_code == 422
+    assert client.get(f"/api/songs/{song['id']}").json()["title"] == "Tharuda Nidana"
+    assert client.patch("/api/songs/missing", json={"title": "X"}).status_code == 404
+
+
+def test_song_reports_the_first_page_holding_a_digital_version(client):
+    """The gallery greys out 'digital version' from this field alone, so it must
+    be absent until a transcription exists and then point at the right page."""
+    created = client.post(
+        "/api/songs/import", data={"title": "Two pages"}, files=_page_file()
+    ).json()
+    song_id = created["song"]["id"]
+    client.post(f"/api/songs/{song_id}/scans", files=_page_file())
+
+    assert client.get(f"/api/songs/{song_id}").json()["digital_page_no"] is None
+
+    pages = client.get(f"/api/songs/{song_id}").json()["scans"]
+    second = next(s for s in pages if s["page_no"] == 2)
+    client.put(
+        f"/api/scans/{second['id']}/transcription",
+        json={"stf": {"header": {}, "lines": []}, "status": "draft"},
+    )
+    assert client.get(f"/api/songs/{song_id}").json()["digital_page_no"] == 2
+    assert [s for s in client.get("/api/songs").json() if s["id"] == song_id][0][
+        "digital_page_no"
+    ] == 2
+
+
+def test_ephemeral_data_dir_is_detected_only_for_the_container_path(tmp_path):
+    """Deploys wipe an unmounted /data silently — the app boots fine and simply
+    has no songs, scans, or sessions. This is the only signal there is."""
+    # A local checkout keeps data/ inside the repo on the root device; that is
+    # normal and must never warn.
+    assert data_dir_is_ephemeral(tmp_path) is False
+
+    # Standing in for the deployed path: same device as root = nothing mounted.
+    unmounted = tmp_path / "data"
+    unmounted.mkdir()
+    assert (
+        data_dir_is_ephemeral(unmounted, container_dir=unmounted, root=tmp_path) is True
+    )
+
+    # A missing container path must not raise on the way to a boolean.
+    assert data_dir_is_ephemeral(
+        Path("/definitely-not-here"), container_dir=Path("/definitely-not-here")
+    ) is False
