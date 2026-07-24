@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from app.learning import baseline_report, evaluation_metrics
-from app.recognition import make_recognizer, read_scan_bytes
+from app.recognition import make_recognizer, make_tiled_recognizer, read_scan_bytes
 
 
 def main() -> None:
@@ -24,8 +24,22 @@ def main() -> None:
         action="store_true",
         help="Run the configured model on each reviewed scan (incurs API cost)",
     )
+    parser.add_argument(
+        "--tiled",
+        choices=["half", "line"],
+        default=None,
+        help=(
+            "Phase 3.5 tiling variant to replay instead of the whole-page control: "
+            "'half' = Rung 1 (two overlapping half-page bands). "
+            "Omit for the whole-page control. Requires --replay."
+        ),
+    )
     parser.add_argument("--model", default=os.getenv("SAREGAMAPIC_MODEL", ""))
     args = parser.parse_args()
+    if args.tiled and not args.replay:
+        parser.error("--tiled requires --replay")
+    if args.tiled == "line":
+        parser.error("--tiled line (Rung 2, per-line) is not implemented yet")
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -42,7 +56,12 @@ def main() -> None:
     if args.replay:
         if not args.model:
             parser.error("--model or SAREGAMAPIC_MODEL is required with --replay")
-        recognizer = make_recognizer(os.getenv("ANTHROPIC_API_KEY", ""), args.model)
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        recognizer = (
+            make_tiled_recognizer(api_key, args.model, tiles=2)
+            if args.tiled == "half"
+            else make_recognizer(api_key, args.model)
+        )
         results = []
         for row in rows:
             started = time.monotonic()
