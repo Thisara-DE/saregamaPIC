@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
   getSong,
@@ -49,6 +49,11 @@ export function EditorPage() {
   const [titleBusy, setTitleBusy] = useState(false);
   const [scanId, setScanId] = useState<string | null>(null);
   const [stf, setStf] = useState<Stf>(EMPTY_STF);
+  // The STF as last persisted (load / recognize / save all set this to the exact
+  // object they put on screen). Every edit helper builds a NEW stf object, so a
+  // plain reference check tells us there is unsaved work — the same trick the
+  // "saved" confirmation below relies on.
+  const [savedStf, setSavedStf] = useState<Stf>(EMPTY_STF);
   const [status, setStatus] = useState<TranscriptionStatus>("draft");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<Pick<
@@ -75,14 +80,39 @@ export function EditorPage() {
       pendingCaret.current = null;
     }
   });
+  // A per-line "+" inserts a blank line; focus it once React has rendered the new
+  // input. Line inputs render in order, so the index maps straight to position.
+  const pendingFocusLine = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingFocusLine.current === null) return;
+    const inputs = document.querySelectorAll<HTMLInputElement>(".stf-line-input");
+    inputs[pendingFocusLine.current]?.focus();
+    pendingFocusLine.current = null;
+  });
 
   const apply = useCallback((t: Transcription) => {
     setStf(t.stf);
+    setSavedStf(t.stf); // now on screen === persisted, so no unsaved work
     setStatus(t.status);
     setWarnings(t.warnings);
     setMetrics({ model: t.model, input_tokens: t.input_tokens, output_tokens: t.output_tokens });
     setHasTranscription(true);
   }, []);
+
+  // Unsaved work = the STF on screen is a different object than the last
+  // persisted one. (Title is excluded — it auto-saves on blur, which the ✕
+  // button's own blur triggers on the way out.)
+  const dirty = stf !== savedStf;
+
+  // Block every in-app exit while there is unsaved work — the ✕ (a PUSH) and the
+  // browser Back button (a POP) both land here, so one dialog covers both. A
+  // hard navigation (tab close / refresh) can't be intercepted this way and is
+  // caught by the beforeunload guard below instead.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      dirty && currentLocation.pathname !== nextLocation.pathname,
+  );
+  const leaving = blocker.state === "blocked";
 
   useEffect(() => {
     let cancelled = false;
@@ -140,8 +170,8 @@ export function EditorPage() {
     }
   }
 
-  async function handleSave(next: TranscriptionStatus) {
-    if (!scanId) return;
+  async function handleSave(next: TranscriptionStatus): Promise<boolean> {
+    if (!scanId) return false;
     setBusy("save");
     setError(null);
     setSaved(null);
@@ -152,12 +182,44 @@ export function EditorPage() {
       // builds a new object, so the banner clears itself the moment the reader
       // changes anything and it can never advertise a stale save.
       setSaved({ status: next, stf: result.stf });
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(null);
     }
   }
+
+  // The ✕ just navigates; the blocker turns that into the dialog when there is
+  // unsaved work, and lets it through cleanly when there isn't.
+  function requestExit() {
+    navigate(`/songs/${songId}`);
+  }
+
+  async function saveAndExit() {
+    // Preserve the transcription's current status (draft stays draft, a
+    // reviewed edit stays reviewed) rather than silently down-grading it.
+    if (await handleSave(status)) blocker.proceed?.();
+    else blocker.reset?.(); // save failed — cancel the exit so the error shows
+  }
+
+  function discardAndExit() {
+    blocker.proceed?.();
+  }
+
+  // Native "Leave site?" prompt for hard navigations while work is unsaved. The
+  // browser owns this dialog (no custom buttons possible), so it is only a
+  // safety net; the in-app ✕ gets the richer save/discard choice.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // required by some browsers to trigger the prompt
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   // The title is song-level, so it saves on its own the moment the field loses
   // focus — no need to press "Mark reviewed" (a page-level action) to keep a
@@ -204,6 +266,18 @@ export function EditorPage() {
     }));
   }
 
+  // Insert a blank line directly below line `i` (the per-line + button), then
+  // focus it so the reader can type straight away — far less disruptive than the
+  // bottom "Add line" when a line is missing in the middle of the sheet.
+  function insertLineAfter(i: number) {
+    setStf((s) => {
+      const lines = [...s.lines];
+      lines.splice(i + 1, 0, { n: 0, kind: "sargam", text: "" });
+      return { ...s, lines: lines.map((l, j) => ({ ...l, n: j + 1 })) };
+    });
+    pendingFocusLine.current = i + 1;
+  }
+
   function deleteLine(i: number) {
     setStf((s) => ({
       ...s,
@@ -228,7 +302,7 @@ export function EditorPage() {
   return (
     <div className="editor">
       <div className="editor-bar">
-        <button className="viewer-btn" onClick={() => navigate(`/songs/${songId}`)}>
+        <button className="viewer-btn" aria-label="Close editor" onClick={requestExit}>
           ✕
         </button>
         <span className="viewer-title">
@@ -359,6 +433,14 @@ export function EditorPage() {
                     onChange={(e) => setLine(i, { text: e.target.value })}
                   />
                   <button
+                    className="line-add"
+                    aria-label={`Add line after line ${line.n}`}
+                    title="Add a line below"
+                    onClick={() => insertLineAfter(i)}
+                  >
+                    +
+                  </button>
+                  <button
                     className="danger-link"
                     aria-label={`Delete line ${line.n}`}
                     onClick={() => deleteLine(i)}
@@ -442,6 +524,42 @@ export function EditorPage() {
           )}
         </div>
       </div>
+
+      {leaving && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !busy && blocker.reset?.()}
+        >
+          <div
+            className="modal-card"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="leave-title"
+            aria-describedby="leave-body"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !busy) blocker.reset?.();
+            }}
+          >
+            <h2 id="leave-title">Unsaved changes</h2>
+            <p id="leave-body" className="muted">
+              You have unsaved changes on this page. Save them before leaving, or discard them?
+            </p>
+            <div className="modal-actions">
+              <button className="primary" disabled={busy !== null} onClick={() => void saveAndExit()}>
+                {busy === "save" ? "Saving…" : "Save & exit"}
+              </button>
+              <button disabled={busy !== null} onClick={() => blocker.reset?.()}>
+                Keep editing
+              </button>
+              <button className="danger-link" disabled={busy !== null} onClick={discardAndExit}>
+                Discard changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

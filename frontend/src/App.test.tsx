@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import { routes } from "./App";
 import type { AuthUser, Song, SongDetail } from "./api/types";
 
 const authUser: AuthUser = {
@@ -87,11 +87,8 @@ const digitalTranscription = {
 };
 
 function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-    </MemoryRouter>,
-  );
+  const router = createMemoryRouter(routes, { initialEntries: [path] });
+  return render(<RouterProvider router={router} />);
 }
 
 describe("App", () => {

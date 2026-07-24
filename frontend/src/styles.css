@@ -897,6 +897,19 @@ button:disabled {
   min-width: 1.75rem;
 }
 
+/* Per-line "add a line below" — same footprint as the ✕ delete beside it, but
+   the accent colour marks it as the constructive action. */
+.stf-line-controls .line-add {
+  min-width: 1.75rem;
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0.25rem 0;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .stf-line-preview {
   padding: 0.15rem 0.5rem 0.35rem;
 }
@@ -915,6 +928,50 @@ button:disabled {
 .metrics {
   font-size: 0.75rem;
   margin-top: 0.75rem;
+}
+
+/* Unsaved-changes prompt when leaving the editor. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(0 0 0 / 55%);
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 24rem;
+  padding: 1.25rem;
+  border-radius: 0.75rem;
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 35%);
+}
+
+.modal-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.modal-card p {
+  margin: 0 0 1rem;
+}
+
+/* Save (primary) and Keep editing sit together; Discard is fenced to the right
+   so a destructive tap is never a neighbour-miss from the safe choices. */
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modal-actions .danger-link {
+  margin-left: auto;
 }
 
 /* Faithful STF rendering: marks stacked above/below the letter. */

@@ -1,10 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import { routes } from "./App";
 import { StfLineText, parseNote } from "./components/StfLineText";
 import { recognizeScan } from "./api/client";
 import type { SongDetail, Transcription } from "./api/types";
+
+/** Render the app at a route through the real (data-router) route tree. */
+function renderAt(path: string) {
+  const router = createMemoryRouter(routes, { initialEntries: [path] });
+  return render(<RouterProvider router={router} />);
+}
 
 const detail: SongDetail = {
   id: "abc123",
@@ -216,11 +222,7 @@ describe("EditorPage", () => {
         "GET /api/scans/scan1/transcription": transcription,
       }),
     );
-    render(
-      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
-        <App />
-      </MemoryRouter>,
-    );
+    renderAt("/songs/abc123/pages/1/edit");
     await waitFor(() => {
       expect(screen.getByDisplayValue("S R_ M^ S'")).toBeInTheDocument();
     });
@@ -241,17 +243,45 @@ describe("EditorPage", () => {
         "GET /api/scans/scan1/transcription": 404,
       }),
     );
-    render(
-      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
-        <App />
-      </MemoryRouter>,
-    );
+    renderAt("/songs/abc123/pages/1/edit");
     await waitFor(() => {
       expect(
         screen.getByText((content) => content.startsWith("No transcription yet")),
       ).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: "Recognize" })).toBeInTheDocument();
+  });
+
+  it("inserts a blank line right below the one whose + you click, not at the bottom", async () => {
+    const twoLines: Transcription = {
+      ...transcription,
+      stf: {
+        header: transcription.stf.header,
+        lines: [
+          { n: 1, kind: "sargam", text: "AAA" },
+          { n: 2, kind: "sargam", text: "BBB" },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        "GET /api/songs/abc123": detail,
+        "GET /api/scans/scan1/transcription": twoLines,
+      }),
+    );
+    renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByDisplayValue("AAA");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add line after line 1" }));
+
+    // New blank line lands between the two, which renumber; not appended at the end.
+    const values = [...document.querySelectorAll<HTMLInputElement>(".stf-line-input")].map(
+      (input) => input.value,
+    );
+    expect(values).toEqual(["AAA", "", "BBB"]);
+    // And it takes focus so the reader can type immediately.
+    expect(document.activeElement).toBe(screen.getByLabelText("Line 2 text"));
   });
 });
 
@@ -267,11 +297,7 @@ describe("EditorPage title editing", () => {
       "PATCH /api/songs/abc123": renamed,
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(
-      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
-        <App />
-      </MemoryRouter>,
-    );
+    renderAt("/songs/abc123/pages/1/edit");
     const titleInput = await screen.findByRole("textbox", { name: "Song title" });
 
     // Blur without editing: no rename request fires.
@@ -307,11 +333,7 @@ describe("EditorPage save confirmation", () => {
         "PUT /api/scans/scan1/transcription": reviewed,
       }),
     );
-    render(
-      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
-        <App />
-      </MemoryRouter>,
-    );
+    renderAt("/songs/abc123/pages/1/edit");
     await screen.findByDisplayValue("S R_ M^ S'");
     expect(screen.queryByRole("button", { name: /digital version/i })).not.toBeInTheDocument();
 
@@ -334,11 +356,7 @@ describe("EditorPage save confirmation", () => {
         "PUT /api/scans/scan1/transcription": reviewed,
       }),
     );
-    render(
-      <MemoryRouter initialEntries={["/songs/abc123/pages/1/edit"]}>
-        <App />
-      </MemoryRouter>,
-    );
+    renderAt("/songs/abc123/pages/1/edit");
     const line = await screen.findByDisplayValue("S R_ M^ S'");
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
     expect(await screen.findByText("Draft saved.")).toBeInTheDocument();
@@ -348,5 +366,105 @@ describe("EditorPage save confirmation", () => {
     await waitFor(() => {
       expect(screen.queryByText("Draft saved.")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("EditorPage unsaved-changes guard", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  function renderEditor(extraRoutes: Record<string, unknown> = {}) {
+    const fetchMock = routeFetch({
+      "GET /api/songs/abc123": detail,
+      "GET /api/scans/scan1/transcription": transcription,
+      ...extraRoutes,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt("/songs/abc123/pages/1/edit");
+    return fetchMock;
+  }
+
+  it("leaves immediately when nothing was edited", async () => {
+    renderEditor();
+    await screen.findByDisplayValue("S R_ M^ S'");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
+
+    // No prompt; the song page (its Photograph action) is shown.
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: /Photograph sheet/ });
+  });
+
+  it("warns on exit with unsaved edits and stays put on Keep editing", async () => {
+    renderEditor();
+    const line = await screen.findByDisplayValue("S R_ M^ S'");
+    fireEvent.change(line, { target: { value: "S R_ M^ S' G" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument());
+    // Still in the editor with the edit intact — no navigation happened.
+    expect(screen.getByDisplayValue("S R_ M^ S' G")).toBeInTheDocument();
+  });
+
+  it("discards edits and leaves without saving", async () => {
+    const fetchMock = renderEditor({ "PUT /api/scans/scan1/transcription": transcription });
+    const line = await screen.findByDisplayValue("S R_ M^ S'");
+    fireEvent.change(line, { target: { value: "S R_ M^ S' G" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+
+    await screen.findByRole("button", { name: /Photograph sheet/ });
+    expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit)?.method === "PUT")).toBe(
+      false,
+    );
+  });
+
+  it("saves then leaves on Save & exit, keeping the current draft status", async () => {
+    const fetchMock = renderEditor({ "PUT /api/scans/scan1/transcription": transcription });
+    const line = await screen.findByDisplayValue("S R_ M^ S'");
+    fireEvent.change(line, { target: { value: "S R_ M^ S' G" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save & exit" }));
+
+    await screen.findByRole("button", { name: /Photograph sheet/ });
+    const put = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    expect(put).toBeTruthy();
+    const body = JSON.parse((put![1] as RequestInit).body as string);
+    expect(body.status).toBe("draft");
+    expect(body.stf.lines[0].text).toBe("S R_ M^ S' G");
+  });
+
+  it("guards the browser Back button, not only the ✕", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        "GET /api/songs/abc123": detail,
+        "GET /api/scans/scan1/transcription": transcription,
+      }),
+    );
+    // Start with the song page already in history, then the editor on top, so a
+    // Back press has somewhere to pop to.
+    const router = createMemoryRouter(routes, {
+      initialEntries: ["/songs/abc123", "/songs/abc123/pages/1/edit"],
+      initialIndex: 1,
+    });
+    render(<RouterProvider router={router} />);
+
+    const line = await screen.findByDisplayValue("S R_ M^ S'");
+    fireEvent.change(line, { target: { value: "S R_ M^ S' G" } });
+
+    // Simulate the browser Back button — a POP navigation, not the ✕.
+    await act(async () => {
+      await router.navigate(-1);
+    });
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+
+    // Discarding lets the back navigation through to the song page.
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    await screen.findByRole("button", { name: /Photograph sheet/ });
   });
 });
