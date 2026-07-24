@@ -51,19 +51,31 @@ jobs:
       - run: npm run build
       - name: Audit npm dependencies
         # npm audit has no per-advisory ignore, so we filter its JSON output.
-        # GHSA-qwww-vcr4-c8h2 (react-router RSC-mode CSRF) is allowlisted: it only
-        # affects the unstable RSC APIs, which this Vite SPA (createBrowserRouter)
-        # does not use, and there is no fix on the react-router v7 line — v8 removes
-        # react-router-dom and requires Node 22 / React 19.2, which this project is
-        # not on. Every OTHER high/critical advisory still fails the build.
+        # `allow` is a newline-separated list of advisory URLs; a `via.url` is
+        # allowlisted when it appears as a substring of that blob (jq contains).
+        # Every OTHER high/critical advisory still fails the build.
+        #
+        # Allowlisted (dev/build-only, transitive, not in the deployed artifact):
+        #   GHSA-qwww-vcr4-c8h2 — react-router RSC-mode CSRF. Only the unstable RSC
+        #     APIs are affected; this Vite SPA (createBrowserRouter) doesn't use them,
+        #     and there's no fix on the react-router v7 line (v8 needs Node 22 / React
+        #     19.2, blocked by the Node 20.8 pin).
+        #   GHSA-mh99-v99m-4gvg — brace-expansion DoS. The genuinely vulnerable v5
+        #     instances are bumped to the patched 5.0.8 in package-lock.json. The two
+        #     that still trip audit (1.1.16, 2.1.2) are the maintainer's *patched*
+        #     maintenance releases; npm audit collapses this multi-major advisory into
+        #     a single "<=5.0.7" range and false-positives them. Its only offered fix
+        #     is eslint v10 (major), blocked by the same Node 20.8 pin.
         run: |
-          allow="https://github.com/advisories/GHSA-qwww-vcr4-c8h2"
+          allow="https://github.com/advisories/GHSA-qwww-vcr4-c8h2
+          https://github.com/advisories/GHSA-mh99-v99m-4gvg"
           npm audit --json > npm-audit.json || true
           npm audit || true
-          count=$(jq --arg allow "$allow" '[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url != $allow)] | length' npm-audit.json)
+          filter='[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url as $u | ($allow | contains($u)) | not)]'
+          count=$(jq --arg allow "$allow" "$filter | length" npm-audit.json)
           if [ "$count" -gt 0 ]; then
             echo "::error::$count high/critical npm advisory(ies) outside the allowlist"
-            jq --arg allow "$allow" '[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url != $allow)]' npm-audit.json
+            jq --arg allow "$allow" "$filter" npm-audit.json
             exit 1
           fi
           echo "No high/critical advisories outside the allowlist."
