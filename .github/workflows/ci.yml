@@ -50,7 +50,23 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - name: Audit npm dependencies
-        run: npm audit --audit-level=high
+        # npm audit has no per-advisory ignore, so we filter its JSON output.
+        # GHSA-qwww-vcr4-c8h2 (react-router RSC-mode CSRF) is allowlisted: it only
+        # affects the unstable RSC APIs, which this Vite SPA (createBrowserRouter)
+        # does not use, and there is no fix on the react-router v7 line — v8 removes
+        # react-router-dom and requires Node 22 / React 19.2, which this project is
+        # not on. Every OTHER high/critical advisory still fails the build.
+        run: |
+          allow="https://github.com/advisories/GHSA-qwww-vcr4-c8h2"
+          npm audit --json > npm-audit.json || true
+          npm audit || true
+          count=$(jq --arg allow "$allow" '[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url != $allow)] | length' npm-audit.json)
+          if [ "$count" -gt 0 ]; then
+            echo "::error::$count high/critical npm advisory(ies) outside the allowlist"
+            jq --arg allow "$allow" '[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url != $allow)]' npm-audit.json
+            exit 1
+          fi
+          echo "No high/critical advisories outside the allowlist."
 
   secrets:
     runs-on: ubuntu-latest
