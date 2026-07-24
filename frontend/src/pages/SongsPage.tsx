@@ -199,126 +199,132 @@ export function SongsPage() {
       )}
 
       <ul className="song-list">
-        {songs?.map((song) => (
-          <li key={song.id} className="song-card">
-            <Link className="song-row" to={`/songs/${song.id}`}>
-              {song.cover_scan_id ? (
-                <img
-                  className="song-cover"
-                  src={scanThumbnailUrl(song.cover_scan_id)}
-                  alt=""
-                  loading="lazy"
-                />
-              ) : (
-                <span className="song-cover placeholder" aria-hidden="true">
-                  ♪
-                </span>
-              )}
+        {songs?.map((song) => {
+          // The cover appears in both states; in the normal row it is part of
+          // the <Link>, in the editing row it just sits alongside the field.
+          const cover = song.cover_scan_id ? (
+            <img
+              className="song-cover"
+              src={scanThumbnailUrl(song.cover_scan_id)}
+              alt=""
+              loading="lazy"
+            />
+          ) : (
+            <span className="song-cover placeholder" aria-hidden="true">
+              ♪
+            </span>
+          );
+
+          return (
+            <li key={song.id} className="song-card">
               {renamingId === song.id ? (
-                // Rendered outside the Link below — this keeps the row's layout
-                // stable while the inline form takes the title's place.
-                <span className="song-title" />
-              ) : (
-                <span className="song-title">{song.title || "Untitled song"}</span>
-              )}
-              <span className="muted">
-                {song.scan_count} {song.scan_count === 1 ? "page" : "pages"}
-              </span>
-            </Link>
-
-            {renamingId === song.id && (
-              <form
-                className="song-rename"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void submitRename(song);
-                }}
-              >
-                <label className="sr-only" htmlFor={`rename-${song.id}`}>
-                  Song name
-                </label>
-                <input
-                  id={`rename-${song.id}`}
-                  type="text"
-                  autoFocus
-                  maxLength={200}
-                  value={renameValue}
-                  placeholder="Song name"
-                  onChange={(event) => setRenameValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") cancelRename();
-                  }}
-                />
-                <button className="primary" type="submit" disabled={!renameValue.trim()}>
-                  Save
-                </button>
-                <button type="button" onClick={cancelRename}>
-                  Cancel
-                </button>
-              </form>
-            )}
-
-            <div className="song-menu-wrap">
-              <button
-                type="button"
-                className="song-menu-button"
-                aria-label={`Actions for ${song.title || "Untitled song"}`}
-                aria-haspopup="menu"
-                aria-expanded={menuFor === song.id}
-                onClick={() => setMenuFor(menuFor === song.id ? null : song.id)}
-              >
-                ⋯
-              </button>
-
-              {menuFor === song.id && (
-                <div className="song-menu" role="menu">
-                  <button type="button" role="menuitem" onClick={() => startRename(song)}>
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    // Greyed out until something has actually been transcribed.
-                    disabled={song.digital_page_no === null}
-                    title={
-                      song.digital_page_no === null
-                        ? "No digital version yet — transcribe a page first"
-                        : undefined
-                    }
-                    onClick={() => {
-                      setMenuFor(null);
-                      navigate(`/songs/${song.id}/pages/${song.digital_page_no}`);
+                // A non-link row so the field can take the title's place — an
+                // <input> cannot live inside the navigating <Link>. Save/Cancel
+                // wrap below on a narrow card, growing it until the edit ends.
+                <div className="song-row song-row-editing">
+                  {cover}
+                  <form
+                    className="song-rename"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void submitRename(song);
                     }}
                   >
-                    Open digital version
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={song.scan_count === 0}
-                    title={song.scan_count === 0 ? "Add a page first" : undefined}
-                    onClick={() => {
-                      setMenuFor(null);
-                      navigate(
-                        `/songs/${song.id}/pages/${song.digital_page_no ?? 1}/edit`,
-                      );
-                    }}
-                  >
-                    Edit digital version
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="danger-item"
-                    onClick={() => void handleDelete(song)}
-                  >
-                    Delete song
-                  </button>
+                    <label className="sr-only" htmlFor={`rename-${song.id}`}>
+                      Song name
+                    </label>
+                    <input
+                      id={`rename-${song.id}`}
+                      type="text"
+                      autoFocus
+                      maxLength={200}
+                      value={renameValue}
+                      placeholder="Song name"
+                      onChange={(event) => setRenameValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") cancelRename();
+                      }}
+                    />
+                    <div className="song-rename-actions">
+                      <button className="primary" type="submit" disabled={!renameValue.trim()}>
+                        Save
+                      </button>
+                      <button type="button" onClick={cancelRename}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
                 </div>
+              ) : (
+                <Link className="song-row" to={`/songs/${song.id}`}>
+                  {cover}
+                  <span className="song-title">{song.title || "Untitled song"}</span>
+                  <span className="muted">
+                    {song.scan_count} {song.scan_count === 1 ? "page" : "pages"}
+                  </span>
+                </Link>
               )}
-            </div>
-          </li>
-        ))}
+
+              <div className="song-menu-wrap">
+                <button
+                  type="button"
+                  className="song-menu-button"
+                  aria-label={`Actions for ${song.title || "Untitled song"}`}
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === song.id}
+                  onClick={() => setMenuFor(menuFor === song.id ? null : song.id)}
+                >
+                  ⋯
+                </button>
+
+                {menuFor === song.id && (
+                  <div className="song-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => startRename(song)}>
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      // Greyed out until something has actually been transcribed.
+                      disabled={song.digital_page_no === null}
+                      title={
+                        song.digital_page_no === null
+                          ? "No digital version yet — transcribe a page first"
+                          : undefined
+                      }
+                      onClick={() => {
+                        setMenuFor(null);
+                        navigate(`/songs/${song.id}/pages/${song.digital_page_no}`);
+                      }}
+                    >
+                      Open digital version
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={song.scan_count === 0}
+                      title={song.scan_count === 0 ? "Add a page first" : undefined}
+                      onClick={() => {
+                        setMenuFor(null);
+                        navigate(`/songs/${song.id}/pages/${song.digital_page_no ?? 1}/edit`);
+                      }}
+                    >
+                      Edit digital version
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="danger-item"
+                      onClick={() => void handleDelete(song)}
+                    >
+                      Delete song
+                    </button>
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

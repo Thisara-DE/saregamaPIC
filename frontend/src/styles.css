@@ -313,17 +313,27 @@ button:disabled {
   border-radius: 0 0 0.4rem 0.4rem;
 }
 
+/* The editing row IS the card (same background/padding as .song-row); the field
+   takes the title's place next to the cover, so it reads in-place, not below. */
 .song-rename {
+  flex: 1;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.4rem;
-  padding: 0 0.6rem 0.6rem 4.35rem;
-  margin-top: -0.4rem;
+  min-width: 0;
 }
 
 .song-rename input {
   flex: 1 1 10rem;
   min-width: 0;
+}
+
+/* Kept together so they wrap as a pair beneath the field on a narrow card,
+   growing it until Save/Cancel ends. */
+.song-rename-actions {
+  display: flex;
+  gap: 0.4rem;
 }
 
 .sr-only {

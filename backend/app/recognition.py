@@ -47,7 +47,7 @@ class RecognitionUnavailable(RuntimeError):
 # survives, low enough to bound cost.
 _MAX_EDGE = 2600
 PREPROCESSING_VERSION = "grayscale-autocontrast-2600-v1"
-PROMPT_VERSION = "stf-v1.1-2026-07-23"
+PROMPT_VERSION = "stf-v1.1-2026-07-24-msharp"
 
 
 def prepare_image(data: bytes) -> tuple[bytes, str]:
@@ -94,14 +94,23 @@ Notes are uppercase letters: S R G M P D N (never lowercase).
   ONE letter live in the same space below the notes: after you identify a curve,
   still check each letter inside it for its own separate flat underline — the curve
   does not absorb them.
-- A dash/tick ON TOP of M = sharp. ONLY M is ever sharp. Encode as a trailing
-  caret: M^.
+- A dash, tick, or "/" slash ON TOP of M = sharp. ONLY M is ever sharp, and in
+  these songs M is sharpened VERY frequently, so inspect directly above every M.
+  Encode as a trailing caret: M^. This sharp mark is a short LINEAR stroke — a
+  dash, tick, or slanted slash — NOT a round dot. Do NOT read it as an
+  upper-octave dot (M'): a mark above M that is a line, however short or slanted,
+  is a sharp (M^); reserve M' for a mark above M that is a genuinely round,
+  dot-like point. When a mark above an M could be either, prefer the sharp — M is
+  sharpened far more often than it is octave-shifted, and a slash misread as a dot
+  is the single most common error on these sheets.
 - S and P NEVER take any accidental. M is never flat. If a mark looks like it
   violates these rules, prefer the legal reading; if you truly cannot, transcribe
   what you see and it will be flagged for review.
 
-Octave dots (distinct from the flat DASH — this is the #1 confusion, look carefully):
-- A DOT above a letter = upper octave: encode a trailing apostrophe, S'
+Octave dots (a dot is a ROUND point; an accidental — flat dash below, sharp tick
+above M — is a LINE. This dot-vs-line call is the #1 confusion, look carefully):
+- A DOT above a letter = upper octave: encode a trailing apostrophe, S'. But a
+  LINEAR mark above M is a sharp (M^), not this octave dot — see the sharp rule.
 - A DOT below a letter = lower octave: encode a trailing comma, S,
 - No dot = middle octave.
 - Marks combine in any order; a lower-octave flat Re is R_, (dash below + dot below).
