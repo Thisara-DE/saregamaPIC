@@ -92,8 +92,16 @@ def _line_warnings(line_no: int, text: str) -> list[str]:
     return warnings
 
 
-# Line kinds that carry sargam note tokens (worth validating). Others (lyric,
-# section, roadmap, annotation) are free text and pass through untouched.
+# Every legal STF line kind, in the order the notation standard lists them.
+# This is notation vocabulary, so it lives here with the rest of the format:
+# `recognition.STF_OUTPUT_SCHEMA` constrains the model to it and
+# `schemas.StfLineIn` validates saves against it, both importing from here so
+# the three can never drift.
+STF_LINE_KINDS = ("section", "sargam", "run", "lyric", "roadmap", "annotation")
+
+# The subset of the above that carries sargam note tokens (worth validating).
+# Others (lyric, section, roadmap, annotation) are free text and pass through
+# untouched.
 _NOTE_KINDS = {"sargam", "run"}
 
 # A sheet with at least this many barred `sargam` lines but zero curves is almost

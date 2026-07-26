@@ -334,6 +334,28 @@ def _recognize(
 def save_transcription(scan_id: str, body: TranscriptionSave, request: Request) -> Transcription:
     """Save the current STF view and append an immutable manual revision."""
     _scan_row(request, scan_id)
+    owner_id = current_user_id(request)
+    # Unlike upload/recognition there's no natural per-action cost gating this
+    # write, so a runaway editor loop or script could otherwise hammer it. The
+    # per-minute limit alone only slows a disk fill (transcription_revisions is
+    # append-only), so — matching every other bounded write path — it's paired
+    # with a daily quota.
+    settings = request.app.state.settings
+    enforce_limit(
+        request,
+        action="transcription_save_rate",
+        subject=owner_id,
+        limit=settings.transcription_save_limit_per_minute,
+        window_seconds=60,
+    )
+    enforce_limit(
+        request,
+        action="transcription_save_quota",
+        subject=owner_id,
+        limit=settings.transcription_save_quota_per_day,
+        window_seconds=86_400,
+        detail="Daily transcription save quota reached",
+    )
     conn: sqlite3.Connection = request.state.db
     stf_json = json.dumps(body.stf.model_dump(), ensure_ascii=False)
     existing = conn.execute(

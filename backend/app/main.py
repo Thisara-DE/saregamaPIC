@@ -30,6 +30,7 @@ from .config import APP_VERSION, Settings
 from .recognition import Recognizer, make_recognizer
 from .routers import learning, scans, songs, transcriptions
 from .schemas import Health
+from .security import configure_logging
 from .storage import data_dir_is_ephemeral
 
 logger = logging.getLogger("saregamapic")
@@ -54,6 +55,9 @@ class SpaStaticFiles(StaticFiles):
 
 def create_app(settings: Settings | None = None, recognizer: Recognizer | None = None) -> FastAPI:
     settings = settings or Settings()
+    # Tied to create_app() (not the lifespan) so it takes effect for every test
+    # client too, since some tests build an app without ever starting it.
+    configure_logging(settings.log_level)
     # Tests inject a fake recognizer; production builds the real Claude client
     # lazily (no SDK import / API key needed unless recognition is actually run).
     recognizer = recognizer or make_recognizer(

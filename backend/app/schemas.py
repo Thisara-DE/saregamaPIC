@@ -1,6 +1,10 @@
 """API request/response models (pydantic). Keep in sync with frontend/src/api/types.ts."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
+
+from .stf import STF_LINE_KINDS
 
 
 class SongCreate(BaseModel):
@@ -103,8 +107,52 @@ class Transcription(BaseModel):
     updated_at: str
 
 
+# --- Inbound-only bounds for saving a transcription -------------------------
+# `Stf`/`StfLine` above stay permissive because `Transcription.stf` also uses
+# them for the GET response: bounding the shared model would mean a row saved
+# before these limits existed (or, before they existed, in a deployed database)
+# could exceed them and turn a page GET into a 500 instead of a readable page.
+# So the limits below apply ONLY to writes, via this separate `...In` set of
+# models used exclusively by `TranscriptionSave`.
+#
+# Real hand-written sheet lines run well under 500 chars and real sheets run
+# well under a few hundred lines (see the vault technical design doc); these
+# caps are generous multiples of that so no legitimate correction is ever
+# rejected, while still keeping one PUT bounded to a sane size on disk.
+_STF_LINE_TEXT_MAX = 2000
+_STF_LINES_MAX = 1000
+_STF_HEADER_FIELD_MAX = 200
+
+
+class StfHeaderIn(BaseModel):
+    concert_scale: str = Field(default="", max_length=_STF_HEADER_FIELD_MAX)
+    alto_scale: str = Field(default="", max_length=_STF_HEADER_FIELD_MAX)
+    beat: str = Field(default="", max_length=_STF_HEADER_FIELD_MAX)
+
+
+class StfLineIn(BaseModel):
+    # `kind` was the actual hole in the first pass at this fix: a max_length on
+    # `text` alone left `kind` free to carry the same abuse (a 100k-char `kind`
+    # on each of 1000 lines reproduced the original disk-fill report through a
+    # different field). Constraining it to the legal set — built from
+    # `stf.STF_LINE_KINDS`, not retyped here — closes that and also
+    # turns it into a real OpenAPI enum, which matters because
+    # frontend/src/api/types.ts mirrors this by hand.
+    kind: Literal[STF_LINE_KINDS]
+    # No natural sheet has anywhere near this many lines (STF_LINES_MAX below
+    # caps the array at 1000); the bound mainly guards against a pathological
+    # bignum literal rather than any real numbering scheme.
+    n: int = Field(ge=0, le=10_000)
+    text: str = Field(max_length=_STF_LINE_TEXT_MAX)
+
+
+class StfIn(BaseModel):
+    header: StfHeaderIn = Field(default_factory=StfHeaderIn)
+    lines: list[StfLineIn] = Field(default_factory=list, max_length=_STF_LINES_MAX)
+
+
 class TranscriptionSave(BaseModel):
-    stf: Stf
+    stf: StfIn
     status: str = Field(default="draft", pattern="^(draft|reviewed)$")
 
 

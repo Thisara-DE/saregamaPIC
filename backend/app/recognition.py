@@ -28,6 +28,8 @@ from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageOps
 
+from .stf import STF_LINE_KINDS
+
 # A recognizer maps (original image bytes, content-type) -> a draft result.
 Recognizer = Callable[[bytes, str], "RecognitionResult"]
 
@@ -370,14 +372,7 @@ _STF_LINE_ARRAY = {
             "n": {"type": "integer"},
             "kind": {
                 "type": "string",
-                "enum": [
-                    "section",
-                    "sargam",
-                    "run",
-                    "lyric",
-                    "roadmap",
-                    "annotation",
-                ],
+                "enum": list(STF_LINE_KINDS),
             },
             "text": {"type": "string"},
         },

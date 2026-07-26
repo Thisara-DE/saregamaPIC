@@ -5,12 +5,52 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import sys
 import time
 from typing import NoReturn
 
 from fastapi import HTTPException, Request
 
 logger = logging.getLogger("saregamapic.security")
+
+_LOG_FORMAT = "%(asctime)sZ %(levelname)s %(name)s %(message)s"
+
+
+def configure_logging(level: str) -> None:
+    """Give the "saregamapic" logger tree a real stdout handler.
+
+    Uvicorn's default logging config only sets up its own "uvicorn.*"
+    loggers; the root logger is left with no handlers and an effective level
+    of WARNING. Every "saregamapic.security" INFO record (login, uninvited
+    account, rate-limit denial, deletion, recognition) was therefore silently
+    dropped in the deployed container — an ERROR-level record like the /data
+    volume warning in main.py only reached stderr via logging's lastResort
+    fallback, unformatted. Attaching our own handler here fixes both without
+    calling logging.basicConfig(), which would reconfigure the ROOT logger for
+    the whole process (including uvicorn's and any dependency's loggers).
+    propagate=False stops the record at "saregamapic" instead of also
+    bubbling to root, so nothing doubles up if a host process later adds its
+    own root handler.
+
+    Idempotent by design: create_app() runs once per test across the whole
+    pytest session (many dozens of times), and this is the only place that
+    configures logging, so a naive `addHandler` would accumulate one handler
+    per call and eventually multiply every log line by the test count. The
+    handler carries a marker attribute so a repeat call swaps it out instead
+    of piling on.
+    """
+    root = logging.getLogger("saregamapic")
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    root.propagate = False
+    for existing in list(root.handlers):
+        if getattr(existing, "_saregamapic_owned", False):
+            root.removeHandler(existing)
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter(_LOG_FORMAT)
+    formatter.converter = time.gmtime  # UTC timestamps, not the instance-level default
+    handler.setFormatter(formatter)
+    handler._saregamapic_owned = True  # type: ignore[attr-defined]
+    root.addHandler(handler)
 
 
 def client_ip(request: Request) -> str:

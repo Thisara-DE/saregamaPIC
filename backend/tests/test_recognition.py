@@ -376,6 +376,137 @@ def test_transcription_404_before_recognition(client):
     assert client.post("/api/scans/nope/recognize").status_code == 404
 
 
+def test_save_transcription_rejects_an_oversized_line(client):
+    """One PUT with a 20,000-line x 5,000-char body once grew the SQLite file to
+    300+ MB in one request; the per-line text cap is the first guard against it."""
+    _, scan_id = _scan(client)
+    body = {
+        "stf": {"header": {}, "lines": [{"n": 1, "kind": "sargam", "text": "S" * 2001}]},
+        "status": "draft",
+    }
+    r = client.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert r.status_code == 422
+
+
+def test_save_transcription_rejects_too_many_lines(client):
+    """Second guard against the same oversized-PUT abuse: bound line COUNT too,
+    not just per-line length."""
+    _, scan_id = _scan(client)
+    body = {
+        "stf": {
+            "header": {},
+            "lines": [{"n": i, "kind": "sargam", "text": "S"} for i in range(1001)],
+        },
+        "status": "draft",
+    }
+    r = client.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert r.status_code == 422
+
+
+def test_save_transcription_rejects_an_illegal_kind(client):
+    """`text`'s max_length alone was not enough: a 100,000-char `kind` on 1000
+    lines reproduces the same disk-fill through a different field, since `kind`
+    previously had no constraint at all. It must be one of the legal values."""
+    _, scan_id = _scan(client)
+    body = {
+        "stf": {"header": {}, "lines": [{"n": 1, "kind": "X" * 100_000, "text": "S"}]},
+        "status": "draft",
+    }
+    r = client.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert r.status_code == 422
+
+
+def test_save_transcription_rate_limited(tmp_path):
+    """Bounding one request's size isn't enough on its own — a script could still
+    send many legal-sized saves back to back, so the endpoint also needs its own
+    rate limit (every other write path already has one)."""
+    settings = Settings(
+        data_dir=tmp_path / "data", transcription_save_limit_per_minute=1
+    )
+    with TestClient(create_app(settings, recognizer=_fake_recognizer)) as limited:
+        song_id = limited.post("/api/songs", json={"title": "Rate"}).json()["id"]
+        scan_id = limited.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("p.jpg", io.BytesIO(_jpeg(80, 60)), "image/jpeg")},
+        ).json()["id"]
+        body = {"stf": {"header": {}, "lines": []}, "status": "draft"}
+        first = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+        second = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "60"
+
+
+def test_save_transcription_daily_quota(tmp_path):
+    """The per-minute limit only slows a disk fill — transcription_revisions is
+    append-only, so even legal-sized saves add up fast at 60/minute. A daily
+    quota closes that, matching the rate+quota pair every other bounded write
+    path (upload, recognition) already has."""
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        transcription_save_limit_per_minute=10,
+        transcription_save_quota_per_day=1,
+    )
+    with TestClient(create_app(settings, recognizer=_fake_recognizer)) as limited:
+        song_id = limited.post("/api/songs", json={"title": "Quota"}).json()["id"]
+        scan_id = limited.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("p.jpg", io.BytesIO(_jpeg(80, 60)), "image/jpeg")},
+        ).json()["id"]
+        body = {"stf": {"header": {}, "lines": []}, "status": "draft"}
+        first = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+        second = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Daily transcription save quota reached"
+    assert second.headers["retry-after"] == "86400"
+
+
+def test_get_returns_a_stored_transcription_with_an_illegal_kind(client):
+    """Same inbound/outbound split regression as the oversized-text test below,
+    for the `kind` constraint specifically: a row stored with a `kind` outside
+    the legal set (older data, or data from before this fix) must still GET
+    back as 200, not fail response validation."""
+    _, scan_id = _scan(client)
+    stored_stf = json.dumps(
+        {"header": {}, "lines": [{"n": 1, "kind": "not-a-real-kind", "text": "S"}]}
+    )
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO transcriptions (id, scan_id, stf_json, status)"
+            " VALUES ('preexisting-kind', ?, ?, 'reviewed')",
+            (scan_id, stored_stf),
+        )
+        conn.commit()
+    r = client.get(f"/api/scans/{scan_id}/transcription")
+    assert r.status_code == 200
+    assert r.json()["stf"]["lines"][0]["kind"] == "not-a-real-kind"
+
+
+def test_get_returns_a_stored_transcription_that_exceeds_the_new_save_limits(client):
+    """Regression guard for the inbound/outbound split: `Transcription.stf` (the
+    GET response model) must stay permissive. If the new save-time bounds were
+    ever applied to the shared `Stf`/`StfLine` model instead of a write-only
+    copy, a row already in the database above the limit — exactly what a
+    deployed database could hold before this fix shipped — would fail response
+    validation and turn a readable page into a 500."""
+    _, scan_id = _scan(client)
+    oversized_text = "S " * 2000  # far past the 2000-char save-time cap
+    oversized_stf = json.dumps(
+        {"header": {}, "lines": [{"n": 1, "kind": "sargam", "text": oversized_text}]}
+    )
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO transcriptions (id, scan_id, stf_json, status)"
+            " VALUES ('preexisting', ?, ?, 'reviewed')",
+            (scan_id, oversized_stf),
+        )
+        conn.commit()
+    r = client.get(f"/api/scans/{scan_id}/transcription")
+    assert r.status_code == 200
+    assert r.json()["stf"]["lines"][0]["text"] == oversized_text
+
+
 def test_recognition_unavailable_returns_503(tmp_path):
     def unavailable(_data, _ct):
         raise RecognitionUnavailable("ANTHROPIC_API_KEY is not set")
