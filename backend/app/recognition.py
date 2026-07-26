@@ -616,6 +616,13 @@ def make_tiled_recognizer(api_key: str, model: str, *, tiles: int = 2) -> Recogn
     stitches the results with overlap dedup. Bands run sequentially (simplest;
     concurrency is deferred until a rung wins). NOT wired into the production
     ``recognize`` route — used by ``evaluate_recognition.py --tiled half``.
+
+    A/B'd 2026-07-26 (n=6, fresh in-batch control + 2-run noise band) and
+    **refuted**: no diacritic gain (accidental flat, octave worse), layout and
+    curve regressed, total corrections and token accuracy both worse, at ~2× cost.
+    The ladder was stopped (no Rung 2). Kept for reproducibility of that negative
+    result, not as a path to adopt — see the vault decision
+    ``saregamapic/decisions/2026-07-26-tiling-refuted``.
     """
 
     def recognize(data: bytes, _content_type: str) -> RecognitionResult:

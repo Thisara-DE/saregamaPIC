@@ -207,12 +207,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--tiled",
-        choices=["half", "line"],
+        choices=["half"],
         default=None,
         help=(
             "Phase 3.5 tiling variant to replay instead of the whole-page control: "
-            "'half' = Rung 1 (two overlapping half-page bands). "
-            "Omit for the whole-page control. Requires --replay."
+            "'half' = Rung 1 (two overlapping half-page bands). Omit for the "
+            "whole-page control. Requires --replay. NOTE: Rung 1 was A/B'd and "
+            "refuted (2026-07-26) — kept for reproducibility, not adoption."
         ),
     )
     parser.add_argument(
@@ -237,8 +238,6 @@ def main() -> None:
         parser.error("--compare runs both control and tiled; do not also pass --tiled")
     if args.tiled and not args.replay:
         parser.error("--tiled requires --replay")
-    if args.tiled == "line":
-        parser.error("--tiled line (Rung 2, per-line) is not implemented yet")
     if args.control_runs < 1:
         parser.error("--control-runs must be >= 1")
 
