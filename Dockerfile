@@ -30,6 +30,10 @@ WORKDIR /app/backend
 # same path means the venv's interpreter symlinks and shebangs stay valid.
 COPY --from=backend-build /app/backend/.venv /app/backend/.venv
 COPY backend/app ./app
+# Offline eval tooling (Phase 3.5 tiling A/B). Inert read-only scripts, no extra
+# deps — shipped so `python -m scripts.evaluate_recognition` can run against the
+# environment's own /data volume (e.g. the Development recognition baseline).
+COPY backend/scripts ./scripts
 COPY --from=frontend-build /build/frontend/dist /app/frontend-dist
 
 ENV PATH="/app/backend/.venv/bin:$PATH" \
