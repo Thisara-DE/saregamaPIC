@@ -2,6 +2,8 @@
 name = "saregamapic-backend"
 version = "0.1.0"
 description = "SaReGaMaPic API — songs, scans, transcriptions (STF)"
+authors = [{ name = "Thisara Mallawa Arachchige" }]
+license = { text = "Proprietary. All rights reserved. See LICENSE." }
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.116",
