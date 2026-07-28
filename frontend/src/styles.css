@@ -32,6 +32,16 @@
   box-sizing: border-box;
 }
 
+/* iOS Safari zooms the page when a focused form control renders under 16px and
+   never zooms back out. Pin every control to the 16px floor in ONE place so new
+   fields inherit it; per-control rules below may match this but must never drop
+   below it (finding 13). */
+input,
+select,
+textarea {
+  font-size: 1rem;
+}
+
 body {
   margin: 0;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -558,7 +568,9 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 0.4rem;
   padding: 0.3rem 0.5rem;
-  font-size: 0.9rem;
+  /* 1rem clears the 16px iOS-zoom floor (finding 13); this select lives on the
+     read-while-playing viewer where a focus-zoom that never reverts is worst. */
+  font-size: 1rem;
   /* Monospace so the nbsp-padded Alto/Concert columns line up in the list. */
   font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
 }
@@ -793,6 +805,9 @@ button:disabled {
 .stf-header input {
   width: 6rem;
   font: inherit;
+  /* After `font: inherit` (which would pull the 0.75rem label size) so the
+     field clears the 16px iOS-zoom floor. */
+  font-size: 1rem;
   padding: 0.4rem 0.5rem;
   border: 1px solid var(--muted);
   border-radius: 0.4rem;
@@ -874,7 +889,6 @@ button:disabled {
 
 .stf-line-controls select {
   font: inherit;
-  font-size: 0.8rem;
   padding: 0.35rem 0.3rem;
   border: 1px solid var(--muted);
   border-radius: 0.4rem;

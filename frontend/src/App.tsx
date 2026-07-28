@@ -6,6 +6,7 @@ import {
   Route,
   useLocation,
   useOutletContext,
+  useRouteError,
 } from "react-router-dom";
 import { ApiError, getCurrentUser, logout } from "./api/client";
 import type { AuthUser } from "./api/types";
@@ -55,24 +56,52 @@ function Shell() {
 // editor's useBlocker — runs inside the data router.
 function RootGate() {
   const [user, setUser] = useState<AuthUser | null>();
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const location = useLocation();
 
   useEffect(() => {
     let active = true;
+    setUser(undefined);
+    setLoadError(null);
     getCurrentUser().then(
       (current) => {
         if (active) setUser(current);
       },
       (error: unknown) => {
-        if (active && error instanceof ApiError && error.status === 401) setUser(null);
-        else if (active) setUser(null);
+        if (!active) return;
+        // Only a 401 means "not signed in" → show the login screen. A 500, or a
+        // network failure (offline surfaces as TypeError, not ApiError), must
+        // NOT masquerade as signed-out — that bounced a logged-in user to the
+        // login screen on any transient server/connectivity hiccup (finding 9).
+        if (error instanceof ApiError && error.status === 401) {
+          setUser(null);
+        } else {
+          setLoadError(error instanceof Error ? error.message : "Something went wrong.");
+        }
       },
     );
     return () => {
       active = false;
     };
-  }, []);
+  }, [attempt]);
 
+  if (loadError !== null) {
+    return (
+      <main className="auth-screen">
+        <h1>SaReGaMaPic</h1>
+        <p className="error">Couldn’t reach the server.</p>
+        <p className="auth-note">{loadError}</p>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => setAttempt((n) => n + 1)}
+        >
+          Try again
+        </button>
+      </main>
+    );
+  }
   if (user === undefined) {
     return <main className="auth-screen">Loading SaReGaMaPic…</main>;
   }
@@ -96,11 +125,36 @@ function RootGate() {
   return <Outlet context={context} />;
 }
 
+// Error boundary for the whole route tree. A data router catches a render/loader
+// throw and renders the nearest route's errorElement instead of unmounting to a
+// blank page (finding 8); this is that fallback. A class boundary around
+// <RouterProvider> would not help — RouterProvider handles route errors itself
+// and does not re-throw them to a parent boundary.
+export function RouteErrorPage() {
+  const error = useRouteError();
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return (
+    <main className="auth-screen">
+      <h1>SaReGaMaPic</h1>
+      <p className="error">Something went wrong.</p>
+      {message ? <p className="auth-note">{message}</p> : null}
+      <button
+        type="button"
+        className="primary-button"
+        onClick={() => window.location.reload()}
+      >
+        Reload
+      </button>
+    </main>
+  );
+}
+
 // Shared route tree — createBrowserRouter in main.tsx (prod) and
 // createMemoryRouter in tests both build a data router from this, so useBlocker
 // works in both.
 export const routes = createRoutesFromElements(
-  <Route element={<RootGate />}>
+  <Route element={<RootGate />} errorElement={<RouteErrorPage />}>
     <Route element={<Shell />}>
       <Route path="/" element={<SongsPage />} />
       <Route path="/songs/:songId" element={<SongPage />} />

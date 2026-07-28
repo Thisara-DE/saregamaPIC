@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { routes } from "./App";
+import { RouteErrorPage, routes } from "./App";
 import type { AuthUser, Song, SongDetail } from "./api/types";
 
 const authUser: AuthUser = {
@@ -354,5 +354,79 @@ describe("App", () => {
       "href",
       "/api/auth/login?return_to=%2Fsongs%2Fabc123",
     );
+  });
+
+  it("shows a retryable error, NOT the login screen, when the session check 500s", async () => {
+    // Finding 9: a 500 on /api/auth/me must not masquerade as "signed out".
+    let meCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") {
+          meCalls += 1;
+          if (meCalls === 1) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ detail: "boom" }), { status: 500 }),
+            );
+          }
+          return Promise.resolve(Response.json(authUser));
+        }
+        return Promise.resolve(Response.json(songs));
+      }),
+    );
+    renderAt("/");
+
+    await screen.findByText("Couldn’t reach the server.");
+    expect(
+      screen.queryByRole("link", { name: "Continue with Google" }),
+    ).not.toBeInTheDocument();
+
+    // Retry re-runs the session check; the second call succeeds → app loads.
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Test Sinhala Song");
+  });
+
+  it("shows the error screen (not login) when the session check fails at the network layer", async () => {
+    // Offline: fetch rejects with a TypeError — not an ApiError 401 — so the
+    // old both-branches-set-null code wrongly bounced the user to login.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") return Promise.reject(new TypeError("Failed to fetch"));
+        return Promise.resolve(Response.json(songs));
+      }),
+    );
+    renderAt("/");
+
+    await screen.findByText("Couldn’t reach the server.");
+    expect(
+      screen.queryByRole("link", { name: "Continue with Google" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("wires the error boundary onto the root route", () => {
+    // Finding 8: the real route tree must carry the fallback, not only the
+    // isolated render below.
+    expect(routes[0]?.errorElement).toBeTruthy();
+  });
+
+  it("renders a fallback instead of blanking when a route throws", () => {
+    // React logs the caught error; silence it so the run output stays clean.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const Boom = () => {
+      throw new Error("render kaboom");
+    };
+    const router = createMemoryRouter(
+      [{ path: "/", element: <Boom />, errorElement: <RouteErrorPage /> }],
+      { initialEntries: ["/"] },
+    );
+    render(<RouterProvider router={router} />);
+
+    expect(screen.getByText("Something went wrong.")).toBeInTheDocument();
+    expect(screen.getByText("render kaboom")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    spy.mockRestore();
   });
 });
