@@ -429,4 +429,27 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
     spy.mockRestore();
   });
+
+  it("catches a REAL page render throw with the wired errorElement, not just a synthetic route", async () => {
+    // Exercises the actual tree: RootGate auth is satisfied, then SongsPage
+    // renders and throws because /api/songs resolves 200 with a non-array, so
+    // `songs?.map` blows up during render — uncaught by the page's fetch
+    // `.catch`, so it must bubble to the root route's errorElement (finding 8).
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") return Promise.resolve(Response.json(authUser));
+        return Promise.resolve(Response.json({ not: "an array" }));
+      }),
+    );
+    renderAt("/");
+
+    await screen.findByText("Something went wrong.");
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    // The gallery was replaced, not augmented — its controls never committed.
+    expect(screen.queryByRole("button", { name: "Choose image…" })).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
 });

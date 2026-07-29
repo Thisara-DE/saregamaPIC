@@ -33,9 +33,11 @@
 }
 
 /* iOS Safari zooms the page when a focused form control renders under 16px and
-   never zooms back out. Pin every control to the 16px floor in ONE place so new
-   fields inherit it; per-control rules below may match this but must never drop
-   below it (finding 13). */
+   never zooms back out. This bare-element rule is the 16px floor for controls
+   that don't set their own size. CAVEAT (finding F1): it is specificity 0-0-1,
+   so any CLASS rule using the `font:` shorthand (e.g. `font: inherit`) outranks
+   it and sets font-size from the cascade — such rules MUST re-state
+   `font-size: 1rem` after the shorthand, or they escape this floor. */
 input,
 select,
 textarea {
@@ -206,6 +208,9 @@ button:disabled {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
+  /* Re-stated after the shorthand — the bare-element floor cannot bind this
+     class rule (finding F1). */
+  font-size: 1rem;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--muted);
   border-radius: 0.5rem;
@@ -889,6 +894,9 @@ button:disabled {
 
 .stf-line-controls select {
   font: inherit;
+  /* Re-stated after the shorthand — the bare-element floor cannot bind this
+     class rule (finding F1). */
+  font-size: 1rem;
   padding: 0.35rem 0.3rem;
   border: 1px solid var(--muted);
   border-radius: 0.4rem;
