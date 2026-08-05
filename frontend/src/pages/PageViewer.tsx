@@ -16,32 +16,49 @@ type View = "original" | "digital";
 // the monospace <select> (regular spaces collapse in option rendering).
 const NBSP = " ";
 
+// Reading preferences (text size, theme) survive page changes and app restarts —
+// see the notes on each below. localStorage can throw (Safari private mode,
+// storage disabled), so never let the viewer crash over a preference: reads fall
+// back to the default, writes are best-effort.
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* preference is best-effort */
+  }
+}
+
 // Digital-view text size. This is the read-while-playing view at music-stand
-// distance, so the chosen size is a per-user constant (not per-page) — persisted
-// so it survives page changes and app restarts. Discrete multipliers keep the
-// stepping predictable and the % labels clean; 1 (= 100%) is always a member.
+// distance, so the chosen size is a per-user constant (not per-page). Discrete
+// multipliers keep the stepping predictable and the % labels clean; 1 (= 100%)
+// is always a member.
 const DIGITAL_SCALES: readonly number[] = [0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const MIN_DIGITAL_SCALE = DIGITAL_SCALES[0] ?? 1;
 const MAX_DIGITAL_SCALE = DIGITAL_SCALES[DIGITAL_SCALES.length - 1] ?? 1;
 const SCALE_KEY = "saregamapic.digitalScale";
 
-// localStorage can throw (Safari private mode, storage disabled) — never let the
-// viewer crash over a preference. Fall back to 100% on read, no-op on write.
 function loadDigitalScale(): number {
-  try {
-    const stored = Number(localStorage.getItem(SCALE_KEY));
-    return DIGITAL_SCALES.includes(stored) ? stored : 1;
-  } catch {
-    return 1;
-  }
+  const stored = Number(readPref(SCALE_KEY));
+  return DIGITAL_SCALES.includes(stored) ? stored : 1;
 }
 
-function saveDigitalScale(scale: number): void {
-  try {
-    localStorage.setItem(SCALE_KEY, String(scale));
-  } catch {
-    /* preference is best-effort */
-  }
+// Viewer theme. Night (light-on-black) is the default — that is how the viewer
+// has always looked and it suits the photo. Day is the paper-like inverse for
+// reading the digital render in a bright room or daylight, where light-on-black
+// glares. Like the text size it is a per-user reading constant, not per-page.
+type Theme = "night" | "day";
+const THEME_KEY = "saregamapic.viewerTheme";
+
+function loadTheme(): Theme {
+  return readPref(THEME_KEY) === "day" ? "day" : "night";
 }
 
 /**
@@ -64,9 +81,11 @@ export function PageViewer() {
   // Key selector auto-picks the nearest octave; this shifts the whole line
   // up/down from there for register preference. Reset whenever the key changes.
   const [octaveShift, setOctaveShift] = useState(0);
-  // Digital text size multiplier (persisted; see DIGITAL_SCALES). Unlike the key
-  // and octave, this is NOT reset per page — it is a reading preference.
+  // Digital text size multiplier (persisted; see DIGITAL_SCALES) and viewer
+  // theme (persisted; see Theme). Unlike the key and octave, neither is reset
+  // per page — they are reading preferences, not per-sheet performance choices.
   const [digitalScale, setDigitalScale] = useState(loadDigitalScale);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
 
   const page = Number(pageNo);
   const scans = useMemo(() => song?.scans ?? [], [song]);
@@ -138,14 +157,20 @@ export function PageViewer() {
 
   // Step the digital text size one notch and persist it. Bounds are enforced by
   // clamping the index into DIGITAL_SCALES; the buttons also disable at the ends.
+  // Both handlers persist outside the state updater — updaters must stay pure
+  // (React double-invokes them in StrictMode).
   function stepDigitalScale(dir: 1 | -1) {
-    setDigitalScale((current) => {
-      const i = DIGITAL_SCALES.indexOf(current);
-      const clamped = Math.min(DIGITAL_SCALES.length - 1, Math.max(0, i + dir));
-      const next = DIGITAL_SCALES[clamped] ?? current;
-      saveDigitalScale(next);
-      return next;
-    });
+    const i = DIGITAL_SCALES.indexOf(digitalScale);
+    const clamped = Math.min(DIGITAL_SCALES.length - 1, Math.max(0, i + dir));
+    const next = DIGITAL_SCALES[clamped] ?? digitalScale;
+    setDigitalScale(next);
+    writePref(SCALE_KEY, String(next));
+  }
+
+  function toggleTheme() {
+    const next: Theme = theme === "day" ? "night" : "day";
+    setTheme(next);
+    writePref(THEME_KEY, next);
   }
 
   const stf = transcription?.stf;
@@ -169,7 +194,7 @@ export function PageViewer() {
     !keyChanged || sourcePc === null ? stf?.header.alto_scale : pitchClassName(targetPc! + 9);
 
   return (
-    <div className="viewer">
+    <div className={`viewer theme-${theme}`}>
       <div className="viewer-bar">
         <button className="viewer-btn" onClick={() => navigate(`/songs/${songId}`)}>
           ✕
@@ -298,30 +323,44 @@ export function PageViewer() {
               Reset
             </button>
           )}
-          {/* Text size — pushed to the right so it stays put as the key/octave
-              controls appear and disappear. Reading size at music-stand distance. */}
-          <span className="text-size" role="group" aria-label="Text size">
+          {/* Reading preferences — pushed to the right so they stay put as the
+              key/octave controls appear and disappear. Both are about reading
+              this view at music-stand distance: how big, and light or dark. */}
+          <span className="reading-prefs">
+            {/* One button, constant meaning: "day theme". aria-pressed carries
+                the state, so the icon does not have to flip to say it. */}
             <button
-              className="viewer-btn size-btn"
-              onClick={() => stepDigitalScale(-1)}
-              disabled={digitalScale <= MIN_DIGITAL_SCALE}
-              aria-label="Smaller text"
-              title="Smaller text"
+              className={`viewer-btn theme-btn${theme === "day" ? " on" : ""}`}
+              onClick={toggleTheme}
+              aria-pressed={theme === "day"}
+              aria-label="Day theme"
+              title="Day theme — dark notes on paper, for bright rooms"
             >
-              A−
+              ☀
             </button>
-            <span className="size-value" aria-live="polite">
-              {Math.round(digitalScale * 100)}%
+            <span className="text-size" role="group" aria-label="Text size">
+              <button
+                className="viewer-btn size-btn"
+                onClick={() => stepDigitalScale(-1)}
+                disabled={digitalScale <= MIN_DIGITAL_SCALE}
+                aria-label="Smaller text"
+                title="Smaller text"
+              >
+                A−
+              </button>
+              <span className="size-value" aria-live="polite">
+                {Math.round(digitalScale * 100)}%
+              </span>
+              <button
+                className="viewer-btn size-btn"
+                onClick={() => stepDigitalScale(1)}
+                disabled={digitalScale >= MAX_DIGITAL_SCALE}
+                aria-label="Larger text"
+                title="Larger text"
+              >
+                A+
+              </button>
             </span>
-            <button
-              className="viewer-btn size-btn"
-              onClick={() => stepDigitalScale(1)}
-              disabled={digitalScale >= MAX_DIGITAL_SCALE}
-              aria-label="Larger text"
-              title="Larger text"
-            >
-              A+
-            </button>
           </span>
         </div>
       )}

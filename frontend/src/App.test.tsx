@@ -346,6 +346,48 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Larger text" })).toBeEnabled();
   });
 
+  it("toggles the viewer between night and day themes and persists the choice", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    const viewer = container.querySelector(".viewer") as HTMLElement;
+    const dayBtn = screen.getByRole("button", { name: "Day theme" });
+
+    // Night is the default — the viewer has always looked this way.
+    expect(viewer).toHaveClass("theme-night");
+    expect(dayBtn).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(dayBtn);
+    expect(viewer).toHaveClass("theme-day");
+    expect(viewer).not.toHaveClass("theme-night");
+    expect(dayBtn).toHaveAttribute("aria-pressed", "true");
+    expect(localStorage.getItem("saregamapic.viewerTheme")).toBe("day");
+
+    fireEvent.click(dayBtn);
+    expect(viewer).toHaveClass("theme-night");
+    expect(localStorage.getItem("saregamapic.viewerTheme")).toBe("night");
+  });
+
+  it("restores a persisted day theme, and keeps it across a page change", async () => {
+    localStorage.setItem("saregamapic.viewerTheme", "day");
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    expect(container.querySelector(".viewer")).toHaveClass("theme-day");
+    expect(screen.getByRole("button", { name: "Day theme" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Unlike key/octave, the theme is a reading preference: navigating to
+    // another page must NOT reset it back to night.
+    fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    await screen.findByText("Test Sinhala Song — 1 / 2");
+    expect(container.querySelector(".viewer")).toHaveClass("theme-day");
+  });
+
   it("viewer shows the ORIGINAL photo, not the thumbnail", async () => {
     vi.stubGlobal("fetch", mockFetchJson(detail));
     renderAt("/songs/abc123/pages/2");

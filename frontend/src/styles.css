@@ -454,15 +454,68 @@ button:disabled {
   row-gap: 0.25rem;
 }
 
-/* Full-screen page viewer: dark stage, original photo, overlaid controls. */
+/* Full-screen page viewer: themed stage, original photo, overlaid controls.
+   NIGHT is the default and matches how the viewer has always looked. DAY exists
+   for the read-while-playing Digital view in a bright room or daylight, where
+   light-on-black glares and the paper-like inverse reads far better at
+   music-stand distance (finding #14). Every colour inside the viewer resolves
+   from these variables, so adding a theme means overriding this block and
+   nothing else — no rule below should hardcode a colour again. */
 
 .viewer {
+  --v-bg: #000;
+  --v-fg: #eee;
+  --v-ink: #eae6ff; /* sargam note ink on the digital stage */
+  --v-dim: #bdb8d8; /* header line, lyrics */
+  --v-faint: #9d97b8; /* roadmap/annotation lines, hints */
+  --v-line: rgba(255, 255, 255, 0.12); /* soft dividers */
+  --v-edge: rgba(255, 255, 255, 0.25); /* control borders */
+  --v-surface: rgba(255, 255, 255, 0.12); /* button fill */
+  --v-on-bg: rgba(255, 255, 255, 0.9); /* active segment / pressed toggle */
+  --v-on-fg: #111;
+  --v-mark: #ff8fa3; /* accidental + octave accent, deliberately loud */
+  --v-error: #ffb4ab;
+
   position: fixed;
   inset: 0;
-  background: #000;
-  color: #eee;
+  background: var(--v-bg);
+  color: var(--v-fg);
   display: flex;
   flex-direction: column;
+}
+
+/* Day theme: warm paper, near-black ink. --v-mark reuses the light-mode accent
+   from :root, which is tuned for contrast against a light surface. */
+.viewer.theme-day {
+  --v-bg: #fbfaf7;
+  --v-fg: #241f38;
+  --v-ink: #16122a;
+  --v-dim: #57506f;
+  /* Darker than the obvious mid-grey: the roadmap/annotation lines and the key
+     hint are the smallest text in the viewer, and the lighter shade measured
+     4.29:1 on this paper — under the 4.5:1 floor. This is 5.19:1 and still
+     reads as the faintest of the three ink levels. */
+  --v-faint: #6d6683;
+  --v-line: rgba(0, 0, 0, 0.12);
+  --v-edge: rgba(0, 0, 0, 0.28);
+  --v-surface: rgba(0, 0, 0, 0.07);
+  --v-on-bg: #241f38;
+  --v-on-fg: #fbfaf7;
+  --v-mark: #c4304a;
+  --v-error: #b3261e;
+}
+
+/* The shared .muted / .error helpers resolve from :root, which flips with the
+   OS colour scheme — inside the viewer that is the wrong signal (a dark-OS
+   .error is pale red, unreadable on the day theme's paper; a light-OS .muted is
+   dark grey on the night theme's black). Re-point them at the viewer palette so
+   the "everything in here follows the VIEWER theme" rule above is actually true. */
+.viewer .muted {
+  color: var(--v-faint);
+}
+
+.viewer .error {
+  color: var(--v-error);
 }
 
 .viewer-bar {
@@ -484,8 +537,8 @@ button:disabled {
 
 .viewer-btn {
   border: none;
-  background: rgba(255, 255, 255, 0.12);
-  color: #eee;
+  background: var(--v-surface);
+  color: var(--v-fg);
   border-radius: 0.5rem;
   min-width: 2.5rem;
   min-height: 2.5rem;
@@ -503,6 +556,13 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The original photo sits on black in BOTH themes: it is a photograph of white
+   paper, and against a light backdrop its edges dissolve into the page. The day
+   theme is a reading aid for the digital render, not a lightbox change. */
+.viewer-stage:not(.digital) {
+  background: #000;
 }
 
 .viewer-stage img {
@@ -530,7 +590,7 @@ button:disabled {
 /* Original ↔ Digital segmented toggle in the viewer bar. */
 .view-toggle {
   display: inline-flex;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid var(--v-edge);
   border-radius: 0.5rem;
   overflow: hidden;
 }
@@ -538,15 +598,15 @@ button:disabled {
 .view-toggle button {
   border: none;
   background: transparent;
-  color: #eee;
+  color: var(--v-fg);
   min-height: 2.5rem;
   padding: 0.25rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .view-toggle button.on {
-  background: rgba(255, 255, 255, 0.9);
-  color: #111;
+  background: var(--v-on-bg);
+  color: var(--v-on-fg);
 }
 
 /* Scale selector row (digital view only). */
@@ -555,8 +615,8 @@ button:disabled {
   align-items: center;
   gap: 0.75rem;
   padding: 0.4rem 0.75rem;
-  color: #eee;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--v-fg);
+  border-bottom: 1px solid var(--v-line);
   flex-wrap: wrap;
 }
 
@@ -568,9 +628,9 @@ button:disabled {
 }
 
 .digital-controls select {
-  background: rgba(255, 255, 255, 0.12);
-  color: #eee;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: var(--v-surface);
+  color: var(--v-fg);
+  border: 1px solid var(--v-edge);
   border-radius: 0.4rem;
   padding: 0.3rem 0.5rem;
   /* 1rem clears the 16px iOS-zoom floor (finding 13); this select lives on the
@@ -612,18 +672,41 @@ button:disabled {
   opacity: 0.4;
 }
 
+/* --v-faint, not the app-level --muted: --muted flips with the OS colour scheme
+   and would render dark grey on the night viewer whenever the OS is in light
+   mode. Everything inside .viewer follows the VIEWER theme, not the OS one. */
 .key-hint {
-  color: var(--muted);
+  color: var(--v-faint);
   font-size: 0.72rem;
 }
 
-/* Digital text-size stepper (A−/A+). Pushed to the far right so it holds its
-   place while the key/octave/reset controls appear and disappear. */
+/* Reading preferences (theme + text size) held together at the far right so
+   they hold their place while the key/octave/reset controls come and go. */
+.reading-prefs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+/* Digital text-size stepper (A−/A+). */
 .text-size {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  margin-left: auto;
+}
+
+/* Day/night toggle for the digital render. Pressed = day theme active. */
+.viewer-btn.theme-btn {
+  min-height: 2rem;
+  min-width: auto;
+  font-size: 0.95rem;
+  padding: 0.25rem 0.55rem;
+}
+
+.viewer-btn.theme-btn.on {
+  background: var(--v-on-bg);
+  color: var(--v-on-fg);
 }
 
 .viewer-btn.size-btn {
@@ -642,12 +725,13 @@ button:disabled {
   text-align: center;
   font-variant-numeric: tabular-nums;
   font-size: 0.8rem;
-  color: #eee;
+  color: var(--v-fg);
 }
 
-/* Digital sargam render on the dark stage. Pin the mark/curve accent to light
-   values so StfLineText reads on black regardless of the OS theme (the viewer
-   is always dark), then reuse the faithful .stf-* rendering verbatim. */
+/* Digital sargam render on the themed stage. Re-point the shared --fg/--mark
+   that StfLineText draws with at the viewer's own ink/accent, so the faithful
+   .stf-* rendering is reused verbatim while following the VIEWER theme rather
+   than the OS colour scheme. */
 .viewer-stage.digital {
   align-items: flex-start;
   justify-content: center;
@@ -655,13 +739,13 @@ button:disabled {
 }
 
 .viewer-digital {
-  --fg: #eae6ff;
-  --mark: #ff8fa3;
+  --fg: var(--v-ink);
+  --mark: var(--v-mark);
   /* Reading-size multiplier, set inline from the A−/A+ control. Every font-size
      in this subtree derives from it so the whole render grows together. Scoped
      to .viewer-digital so the editor's identical .stf-line-render is untouched. */
   --digital-scale: 1;
-  color: #eae6ff;
+  color: var(--v-ink);
   width: 100%;
   max-width: 900px;
 }
@@ -681,14 +765,14 @@ button:disabled {
   flex-wrap: wrap;
   gap: 1rem;
   font-size: calc(0.9rem * var(--digital-scale));
-  color: #bdb8d8;
+  color: var(--v-dim);
   padding-bottom: 0.75rem;
   margin-bottom: 0.75rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid var(--v-line);
 }
 
 .transposed-tag {
-  color: #ff8fa3;
+  color: var(--v-mark);
 }
 
 .digital-lines {
@@ -704,19 +788,19 @@ button:disabled {
 .digital-line.kind-section .digital-text {
   font-weight: 600;
   font-size: calc(1.05rem * var(--digital-scale));
-  color: #eae6ff;
+  color: var(--v-ink);
   display: inline-block;
   margin-top: 0.6rem;
 }
 
 .digital-line.kind-lyric .digital-text {
-  color: #bdb8d8;
+  color: var(--v-dim);
   font-style: italic;
 }
 
 .digital-line.kind-roadmap .digital-text,
 .digital-line.kind-annotation .digital-text {
-  color: #9d97b8;
+  color: var(--v-faint);
   font-size: calc(0.9rem * var(--digital-scale));
 }
 
