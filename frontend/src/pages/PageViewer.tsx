@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, deleteScan, getSong, getTranscription, scanImageUrl } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
@@ -15,6 +15,34 @@ type View = "original" | "digital";
 // Non-breaking space — pads the two-name Key options so the columns line up in
 // the monospace <select> (regular spaces collapse in option rendering).
 const NBSP = " ";
+
+// Digital-view text size. This is the read-while-playing view at music-stand
+// distance, so the chosen size is a per-user constant (not per-page) — persisted
+// so it survives page changes and app restarts. Discrete multipliers keep the
+// stepping predictable and the % labels clean; 1 (= 100%) is always a member.
+const DIGITAL_SCALES: readonly number[] = [0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const MIN_DIGITAL_SCALE = DIGITAL_SCALES[0] ?? 1;
+const MAX_DIGITAL_SCALE = DIGITAL_SCALES[DIGITAL_SCALES.length - 1] ?? 1;
+const SCALE_KEY = "saregamapic.digitalScale";
+
+// localStorage can throw (Safari private mode, storage disabled) — never let the
+// viewer crash over a preference. Fall back to 100% on read, no-op on write.
+function loadDigitalScale(): number {
+  try {
+    const stored = Number(localStorage.getItem(SCALE_KEY));
+    return DIGITAL_SCALES.includes(stored) ? stored : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function saveDigitalScale(scale: number): void {
+  try {
+    localStorage.setItem(SCALE_KEY, String(scale));
+  } catch {
+    /* preference is best-effort */
+  }
+}
 
 /**
  * Full-screen viewer for one page. Toggles between the ORIGINAL photo (fidelity
@@ -36,6 +64,9 @@ export function PageViewer() {
   // Key selector auto-picks the nearest octave; this shifts the whole line
   // up/down from there for register preference. Reset whenever the key changes.
   const [octaveShift, setOctaveShift] = useState(0);
+  // Digital text size multiplier (persisted; see DIGITAL_SCALES). Unlike the key
+  // and octave, this is NOT reset per page — it is a reading preference.
+  const [digitalScale, setDigitalScale] = useState(loadDigitalScale);
 
   const page = Number(pageNo);
   const scans = useMemo(() => song?.scans ?? [], [song]);
@@ -103,6 +134,18 @@ export function PageViewer() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  // Step the digital text size one notch and persist it. Bounds are enforced by
+  // clamping the index into DIGITAL_SCALES; the buttons also disable at the ends.
+  function stepDigitalScale(dir: 1 | -1) {
+    setDigitalScale((current) => {
+      const i = DIGITAL_SCALES.indexOf(current);
+      const clamped = Math.min(DIGITAL_SCALES.length - 1, Math.max(0, i + dir));
+      const next = DIGITAL_SCALES[clamped] ?? current;
+      saveDigitalScale(next);
+      return next;
+    });
   }
 
   const stf = transcription?.stf;
@@ -255,6 +298,31 @@ export function PageViewer() {
               Reset
             </button>
           )}
+          {/* Text size — pushed to the right so it stays put as the key/octave
+              controls appear and disappear. Reading size at music-stand distance. */}
+          <span className="text-size" role="group" aria-label="Text size">
+            <button
+              className="viewer-btn size-btn"
+              onClick={() => stepDigitalScale(-1)}
+              disabled={digitalScale <= MIN_DIGITAL_SCALE}
+              aria-label="Smaller text"
+              title="Smaller text"
+            >
+              A−
+            </button>
+            <span className="size-value" aria-live="polite">
+              {Math.round(digitalScale * 100)}%
+            </span>
+            <button
+              className="viewer-btn size-btn"
+              onClick={() => stepDigitalScale(1)}
+              disabled={digitalScale >= MAX_DIGITAL_SCALE}
+              aria-label="Larger text"
+              title="Larger text"
+            >
+              A+
+            </button>
+          </span>
         </div>
       )}
 
@@ -274,7 +342,10 @@ export function PageViewer() {
 
       {scan && view === "digital" && stf && (
         <div className="viewer-stage digital">
-          <div className="viewer-digital">
+          <div
+            className="viewer-digital"
+            style={{ "--digital-scale": digitalScale } as CSSProperties}
+          >
             {(shownConcert || shownAlto || stf.header.beat) && (
               <div className="digital-header">
                 {shownConcert && <span>Concert {shownConcert}</span>}

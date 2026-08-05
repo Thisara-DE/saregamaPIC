@@ -617,6 +617,34 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+/* Digital text-size stepper (A−/A+). Pushed to the far right so it holds its
+   place while the key/octave/reset controls appear and disappear. */
+.text-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.viewer-btn.size-btn {
+  min-height: 2rem;
+  min-width: auto;
+  font-size: 0.95rem;
+  padding: 0.25rem 0.55rem;
+}
+
+.viewer-btn.size-btn:disabled {
+  opacity: 0.4;
+}
+
+.size-value {
+  min-width: 3ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: #eee;
+}
+
 /* Digital sargam render on the dark stage. Pin the mark/curve accent to light
    values so StfLineText reads on black regardless of the OS theme (the viewer
    is always dark), then reuse the faithful .stf-* rendering verbatim. */
@@ -629,16 +657,30 @@ button:disabled {
 .viewer-digital {
   --fg: #eae6ff;
   --mark: #ff8fa3;
+  /* Reading-size multiplier, set inline from the A−/A+ control. Every font-size
+     in this subtree derives from it so the whole render grows together. Scoped
+     to .viewer-digital so the editor's identical .stf-line-render is untouched. */
+  --digital-scale: 1;
   color: #eae6ff;
   width: 100%;
   max-width: 900px;
+}
+
+/* Scale the faithful note render and the free-text lines with --digital-scale.
+   These override the shared base sizes only inside the digital viewer. */
+.viewer-digital .stf-line-render {
+  font-size: calc(1.4rem * var(--digital-scale));
+}
+
+.viewer-digital .digital-text {
+  font-size: calc(1rem * var(--digital-scale));
 }
 
 .digital-header {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
-  font-size: 0.9rem;
+  font-size: calc(0.9rem * var(--digital-scale));
   color: #bdb8d8;
   padding-bottom: 0.75rem;
   margin-bottom: 0.75rem;
@@ -661,7 +703,7 @@ button:disabled {
 
 .digital-line.kind-section .digital-text {
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: calc(1.05rem * var(--digital-scale));
   color: #eae6ff;
   display: inline-block;
   margin-top: 0.6rem;
@@ -675,7 +717,7 @@ button:disabled {
 .digital-line.kind-roadmap .digital-text,
 .digital-line.kind-annotation .digital-text {
   color: #9d97b8;
-  font-size: 0.9rem;
+  font-size: calc(0.9rem * var(--digital-scale));
 }
 
 /* Correction editor: photo ↔ editable STF, full-screen (escapes #root). */

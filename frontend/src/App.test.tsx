@@ -94,6 +94,7 @@ function renderAt(path: string) {
 describe("App", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear(); // the digital text-size preference persists here
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:sheet-preview"),
@@ -305,6 +306,44 @@ describe("App", () => {
       "src",
       "/api/scans/scan2/image",
     );
+  });
+
+  it("steps the digital text size and persists the choice", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    const digital = container.querySelector(".viewer-digital") as HTMLElement;
+    const larger = screen.getByRole("button", { name: "Larger text" });
+    const smaller = screen.getByRole("button", { name: "Smaller text" });
+
+    // Opens at 100% = the unscaled default.
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(digital.style.getPropertyValue("--digital-scale")).toBe("1");
+
+    fireEvent.click(larger);
+    expect(screen.getByText("125%")).toBeInTheDocument();
+    expect(digital.style.getPropertyValue("--digital-scale")).toBe("1.25");
+    // Persisted so the music-stand size survives a page change / app restart.
+    expect(localStorage.getItem("saregamapic.digitalScale")).toBe("1.25");
+
+    fireEvent.click(smaller);
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(localStorage.getItem("saregamapic.digitalScale")).toBe("1");
+  });
+
+  it("disables the smaller-text button at the minimum size", async () => {
+    localStorage.setItem("saregamapic.digitalScale", "0.8"); // smallest step
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    // The persisted preference is restored, not reset to 100%.
+    expect(screen.getByText("80%")).toBeInTheDocument();
+    const digital = container.querySelector(".viewer-digital") as HTMLElement;
+    expect(digital.style.getPropertyValue("--digital-scale")).toBe("0.8");
+    expect(screen.getByRole("button", { name: "Smaller text" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Larger text" })).toBeEnabled();
   });
 
   it("viewer shows the ORIGINAL photo, not the thumbnail", async () => {
