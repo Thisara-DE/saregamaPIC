@@ -66,9 +66,25 @@ jobs:
         #     maintenance releases; npm audit collapses this multi-major advisory into
         #     a single "<=5.0.7" range and false-positives them. Its only offered fix
         #     is eslint v10 (major), blocked by the same Node 20.8 pin.
+        #   GHSA-rgw5-rvv9-x895 — brace-expansion DoS, follow-up to the above that
+        #     bypasses the CVE-2026-14257 mitigation. Unlike GHSA-mh99, the locked
+        #     1.1.16 / 2.1.2 ARE affected (fixes are 1.1.18 / 2.1.4 / 5.0.9). Accepted,
+        #     not patched: brace-expansion is build/lint tooling only (eslint, glob,
+        #     minimatch) and is never bundled into the deployed SPA, so this DoS is
+        #     unreachable in production; forcing the patched versions across the 1/2/5
+        #     majors in the tree via an override risks breaking minimatch. Revisit at
+        #     the next Node-unpin / eslint-major bump.
+        #   GHSA-7p8r-x3mc-p8w7 — fast-uri host confusion. Build-time only:
+        #     vite-plugin-pwa -> workbox-build -> ajv -> fast-uri, used to generate
+        #     the service worker at build. Not bundled into the deployed artifact and
+        #     never parses attacker-controlled URIs at app runtime, so it is
+        #     unreachable in production. Fold the patched fast-uri into the lockfile
+        #     at the next dependency bump (a fix exists) and drop this line then.
         run: |
           allow="https://github.com/advisories/GHSA-qwww-vcr4-c8h2
-          https://github.com/advisories/GHSA-mh99-v99m-4gvg"
+          https://github.com/advisories/GHSA-mh99-v99m-4gvg
+          https://github.com/advisories/GHSA-rgw5-rvv9-x895
+          https://github.com/advisories/GHSA-7p8r-x3mc-p8w7"
           npm audit --json > npm-audit.json || true
           npm audit || true
           filter='[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url as $u | ($allow | contains($u)) | not)]'
