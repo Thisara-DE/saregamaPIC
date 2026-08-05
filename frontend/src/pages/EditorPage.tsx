@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
@@ -10,6 +17,25 @@ import {
   scanPreviewUrl,
 } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
+import {
+  DOUBLE_TAP_SCALE,
+  distance,
+  fitTransform,
+  IDENTITY,
+  isPannable,
+  MAX_SCALE,
+  MIN_SCALE,
+  midpoint,
+  panBy,
+  pinchFactor,
+  STEP_FACTOR,
+  zoomAbout,
+  zoomTo,
+  type Fit,
+  type Point,
+  type Transform,
+} from "../photoZoom";
+import { readPref, writePref } from "../prefs";
 import { insertToken, toggleMark, type Mark } from "../stfEdit";
 import type { Stf, StfLine, Transcription, TranscriptionStatus } from "../api/types";
 
@@ -30,6 +56,19 @@ const INSERT_BUTTONS: { label: string; title: string; token: string }[] = [
 ];
 
 const EMPTY_STF: Stf = { header: { concert_scale: "", alto_scale: "", beat: "" }, lines: [] };
+
+// Whether the photo pane is open. A working preference, not a property of the
+// page — someone who types from a printed sheet beside them wants the form
+// full-width on every page, not just this one — so it persists like the
+// viewer's reading preferences. Default is open: the photo is the thing being
+// corrected against.
+const PHOTO_KEY = "saregamapic.editorPhotoOpen";
+
+// How close in time and space two taps must be to count as a double-tap. The
+// 300ms matches the browser's own dblclick window; 24px is a fingertip, so a
+// slightly shifted second tap still counts.
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_SLOP = 24;
 
 /**
  * Correction editor: original photo ↔ editable STF, side by side. "Recognize"
@@ -89,6 +128,138 @@ export function EditorPage() {
     inputs[pendingFocusLine.current]?.focus();
     pendingFocusLine.current = null;
   });
+
+  // --- Photo pane (codebase-review finding #11) ------------------------------
+  // The pane used to be a fixed 38vh window onto a downscaled scan with no zoom
+  // and no way out of the way, so checking one faint accidental meant squinting
+  // and typing meant losing a third of the screen. It can now be collapsed, and
+  // the photo pinched, dragged and double-tapped.
+  const [photoOpen, setPhotoOpen] = useState(() => readPref(PHOTO_KEY) !== "0");
+  const [zoom, setZoom] = useState<Transform>(IDENTITY);
+  const [pannable, setPannable] = useState(false);
+  const photoRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  // The live transform. `zoom` drives the render; this mirror is what the
+  // gesture handlers read and write, so a burst of pointermove events within
+  // one frame compounds onto the latest value rather than a stale committed one.
+  const zoomRef = useRef<Transform>(IDENTITY);
+  const pointers = useRef(new Map<number, Point>());
+  const pinchSpread = useRef<number | null>(null);
+  const lastTap = useRef<(Point & { at: number }) | null>(null);
+  // Set by any movement between pointerdown and pointerup, so the end of a pan
+  // or pinch is never mistaken for a tap.
+  const moved = useRef(false);
+
+  // The pane's box and the image's UNTRANSFORMED size. offsetWidth/Height
+  // ignore the CSS transform, so they stay correct at any zoom.
+  function readFit(): Fit {
+    return {
+      paneW: photoRef.current?.clientWidth ?? 0,
+      paneH: photoRef.current?.clientHeight ?? 0,
+      imageW: imgRef.current?.offsetWidth ?? 0,
+      imageH: imgRef.current?.offsetHeight ?? 0,
+    };
+  }
+
+  function applyZoom(next: Transform) {
+    zoomRef.current = next;
+    setZoom(next);
+    setPannable(isPannable(next, readFit()));
+  }
+
+  /** Pointer position in the pane's own coordinates, which is what the maths wants. */
+  function panePoint(e: { clientX: number; clientY: number }): Point {
+    const box = photoRef.current?.getBoundingClientRect();
+    return { x: e.clientX - (box?.left ?? 0), y: e.clientY - (box?.top ?? 0) };
+  }
+
+  // A new page means a new sheet; start it fitted rather than wherever the last
+  // one was left zoomed.
+  useEffect(() => {
+    zoomRef.current = IDENTITY;
+    setZoom(IDENTITY);
+    setPannable(false);
+  }, [scanId]);
+
+  function togglePhoto() {
+    const next = !photoOpen;
+    setPhotoOpen(next);
+    writePref(PHOTO_KEY, next ? "1" : "0");
+  }
+
+  // The buttons zoom about the middle of the pane — the only focal point a
+  // mouse or keyboard user has expressed an interest in.
+  function stepZoom(dir: 1 | -1) {
+    const fit = readFit();
+    const factor = dir === 1 ? STEP_FACTOR : 1 / STEP_FACTOR;
+    applyZoom(zoomAbout(zoomRef.current, factor, fit.paneW / 2, fit.paneH / 2, fit));
+  }
+
+  function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture is an optimisation — the gesture still works without it */
+    }
+    pointers.current.set(e.pointerId, panePoint(e));
+    moved.current = false;
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinchSpread.current = a && b ? distance(a, b) : null;
+    }
+  }
+
+  function handlePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    const previous = pointers.current.get(e.pointerId);
+    if (!previous) return; // a pointer that never went down here (or already up)
+    const current = panePoint(e);
+    pointers.current.set(e.pointerId, current);
+    const fit = readFit();
+
+    if (pointers.current.size === 1) {
+      const dx = current.x - previous.x;
+      const dy = current.y - previous.y;
+      if (dx !== 0 || dy !== 0) moved.current = true;
+      applyZoom(panBy(zoomRef.current, dx, dy, fit));
+      return;
+    }
+
+    // Two or more fingers: pinch on the first two. Tracking the spread frame to
+    // frame (rather than against the gesture's start) means a finger lifted and
+    // replaced mid-pinch resumes smoothly instead of jumping.
+    const [a, b] = [...pointers.current.values()];
+    if (!a || !b) return;
+    const spread = distance(a, b);
+    const factor = pinchFactor(pinchSpread.current, spread);
+    pinchSpread.current = spread;
+    const focus = midpoint(a, b);
+    moved.current = true;
+    applyZoom(zoomAbout(zoomRef.current, factor, focus.x, focus.y, fit));
+  }
+
+  function handlePointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+    const point = pointers.current.get(e.pointerId);
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinchSpread.current = null;
+    // Only a clean tap that ended the whole gesture can be half of a double-tap.
+    if (!point || moved.current || pointers.current.size > 0) return;
+
+    const at = Date.now();
+    const previous = lastTap.current;
+    if (previous && at - previous.at < DOUBLE_TAP_MS && distance(previous, point) < DOUBLE_TAP_SLOP) {
+      // Double-tap toggles between the fitted sheet and a reading zoom on the
+      // spot tapped — check one accidental and get straight back out.
+      const fit = readFit();
+      applyZoom(
+        zoomRef.current.scale > MIN_SCALE
+          ? fitTransform(fit)
+          : zoomTo(zoomRef.current, DOUBLE_TAP_SCALE, point.x, point.y, fit),
+      );
+      lastTap.current = null;
+      return;
+    }
+    lastTap.current = { ...point, at };
+  }
 
   const apply = useCallback((t: Transcription) => {
     setStf(t.stf);
@@ -309,6 +480,20 @@ export function EditorPage() {
           {`${title || "Untitled song"} — page ${page}`}
           {hasTranscription && <span className={`status-pill ${status}`}>{status}</span>}
         </span>
+        {/* Photo pane toggle. One button with a constant meaning ("show the
+            photo"), aria-pressed carrying the state — the icon never has to be
+            read as "current state" or "what happens next". It lives in the bar
+            rather than on the pane so it is still reachable once the pane is
+            hidden, the same reasoning as the viewer's theme toggle (F3). */}
+        <button
+          className={`viewer-btn photo-btn${photoOpen ? " on" : ""}`}
+          onClick={togglePhoto}
+          aria-pressed={photoOpen}
+          aria-label="Show photo"
+          title="Show or hide the original photo"
+        >
+          🖼
+        </button>
         <button
           className="primary"
           disabled={!scanId || busy !== null}
@@ -328,14 +513,66 @@ export function EditorPage() {
       )}
 
       <div className="editor-split">
-        <div className="editor-photo">
-          {scanId && (
-            <img
-              src={scanPreviewUrl(scanId)}
-              alt={`Page ${page} of ${title || "Untitled song"}`}
-            />
-          )}
-        </div>
+        {photoOpen && (
+          <div
+            className={`editor-photo${pannable ? " pannable" : ""}`}
+            ref={photoRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          >
+            {scanId && (
+              <img
+                ref={imgRef}
+                src={scanPreviewUrl(scanId)}
+                alt={`Page ${page} of ${title || "Untitled song"}`}
+                // The browser's own image drag would fight the pan gesture.
+                draggable={false}
+                // The fit isn't knowable until the image has a height; settle it
+                // once it does (this is also what centres a sheet that fits).
+                onLoad={() => applyZoom(fitTransform(readFit()))}
+                style={{ transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})` }}
+              />
+            )}
+            {/* Floated over the photo so they cost no height in the 38vh phone
+                pane. stopPropagation keeps a button press from being read as
+                the start of a pan. */}
+            <div
+              className="photo-tools"
+              role="group"
+              aria-label="Photo zoom"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <button
+                aria-label="Zoom out"
+                title="Zoom out"
+                disabled={zoom.scale <= MIN_SCALE}
+                onClick={() => stepZoom(-1)}
+              >
+                −
+              </button>
+              <span className="photo-zoom-value" aria-live="polite">
+                {Math.round(zoom.scale * 100)}%
+              </span>
+              <button
+                aria-label="Zoom in"
+                title="Zoom in"
+                disabled={zoom.scale >= MAX_SCALE}
+                onClick={() => stepZoom(1)}
+              >
+                +
+              </button>
+              <button
+                aria-label="Fit the photo"
+                title="Fit the whole width, back at the top"
+                onClick={() => applyZoom(fitTransform(readFit()))}
+              >
+                ⤢
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="editor-form">
           {busy === "load" && <p className="muted">Loading…</p>}

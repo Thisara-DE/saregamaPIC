@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, deleteScan, getSong, getTranscription, scanImageUrl } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
+import { readPref, writePref } from "../prefs";
 import {
   pitchClassName,
   scalePitchClass,
@@ -17,24 +18,7 @@ type View = "original" | "digital";
 const NBSP = " ";
 
 // Reading preferences (text size, theme) survive page changes and app restarts —
-// see the notes on each below. localStorage can throw (Safari private mode,
-// storage disabled), so never let the viewer crash over a preference: reads fall
-// back to the default, writes are best-effort.
-function readPref(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writePref(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* preference is best-effort */
-  }
-}
+// see the notes on each below, and prefs.ts for why every access is guarded.
 
 // Digital-view text size. This is the read-while-playing view at music-stand
 // distance, so the chosen size is a per-user constant (not per-page). Discrete

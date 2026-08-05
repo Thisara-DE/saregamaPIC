@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./App";
 import { StfLineText, parseNote } from "./components/StfLineText";
 import { recognizeScan } from "./api/client";
@@ -282,6 +282,83 @@ describe("EditorPage", () => {
     expect(values).toEqual(["AAA", "", "BBB"]);
     // And it takes focus so the reader can type immediately.
     expect(document.activeElement).toBe(screen.getByLabelText("Line 2 text"));
+  });
+});
+
+describe("EditorPage photo pane", () => {
+  // The pane's open/closed state persists, so it has to be cleared on the way
+  // out too or it leaks into every describe below.
+  afterEach(() => localStorage.clear());
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        "GET /api/songs/abc123": detail,
+        "GET /api/scans/scan1/transcription": transcription,
+      }),
+    );
+  });
+
+  it("collapses the photo out of the way and remembers that for the next page", async () => {
+    const first = renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByDisplayValue("S R_ M^ S'");
+    expect(screen.getByRole("img", { name: /Page 1 of/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show photo" }));
+
+    // Gone entirely — the STF form gets the whole screen, which is the point.
+    expect(screen.queryByRole("img", { name: /Page 1 of/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show photo" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    // A working preference, not page state: still collapsed on a fresh mount.
+    first.unmount();
+    renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByDisplayValue("S R_ M^ S'");
+    expect(screen.queryByRole("img", { name: /Page 1 of/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the toggle reachable once the pane is hidden", async () => {
+    renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByDisplayValue("S R_ M^ S'");
+    fireEvent.click(screen.getByRole("button", { name: "Show photo" }));
+
+    // The zoom controls go with the pane, but the way back must not — that is
+    // the trap finding F3 caught in the viewer's theme toggle.
+    expect(screen.queryByRole("group", { name: "Photo zoom" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show photo" }));
+    expect(screen.getByRole("img", { name: /Page 1 of/ })).toBeInTheDocument();
+  });
+
+  it("zooms the photo with the buttons and stops at both bounds", async () => {
+    renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByDisplayValue("S R_ M^ S'");
+    const photo = screen.getByRole("img", { name: /Page 1 of/ });
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+
+    // Fitted to start: no zooming out below the whole sheet.
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(zoomOut).toBeDisabled();
+
+    fireEvent.click(zoomIn);
+    expect(screen.getByText("150%")).toBeInTheDocument();
+    expect(photo).toHaveStyle({ transform: "translate(0px, 0px) scale(1.5)" });
+    expect(zoomOut).toBeEnabled();
+
+    // Six presses of 1.5x overshoot the 6x ceiling; the button disables there.
+    for (let i = 0; i < 6; i += 1) fireEvent.click(zoomIn);
+    expect(screen.getByText("600%")).toBeInTheDocument();
+    expect(zoomIn).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fit the photo" }));
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(zoomOut).toBeDisabled();
   });
 });
 

@@ -834,6 +834,14 @@ button:disabled {
   color: var(--fg);
 }
 
+/* Photo-pane toggle; pressed = the pane is showing. Specificity 0-3-0 so it
+   outranks the .editor-bar .viewer-btn (0-2-0) palette above. */
+.viewer-btn.photo-btn.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
 .status-pill {
   margin-left: 0.5rem;
   font-size: 0.7rem;
@@ -871,17 +879,85 @@ button:disabled {
   min-height: 0;
 }
 
+/* The photo pane pans and zooms under its own transform rather than scrolling
+   (finding #11), so it clips its content and positions the image absolutely.
+   photoZoom.ts owns the arithmetic; this only has to not fight it. */
 .editor-photo {
   flex: 1;
-  overflow: auto;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
   background: #000;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  /* The pane owns every touch gesture on it: one finger pans the sheet, two
+     pinch it. Without this the browser takes the drag for page scroll and the
+     pinch for document zoom, and the photo never moves at all. */
+  touch-action: none;
+}
+
+/* Only offer the grab cursor when a drag would actually move something —
+   photoZoom.isPannable decides, so the pane never invites a gesture it ignores. */
+.editor-photo.pannable {
+  cursor: grab;
+}
+
+.editor-photo.pannable:active {
+  cursor: grabbing;
 }
 
 .editor-photo img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Scale 1 = fitted to the pane's WIDTH, which is how this pane has always
+     looked. The height follows the sheet's aspect, so a portrait page is taller
+     than the pane and pans vertically before any zoom is involved. */
   max-width: 100%;
+  transform-origin: 0 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Zoom controls float over the photo so they cost no height in the 38vh phone
+   pane. Deliberately theme-independent — a fixed scrim with a white glyph —
+   for the same reason as .viewer-nav (finding F2): they sit over a photograph
+   of white paper on a black backdrop, so neither end of a palette is safe.
+   Measured: 21:1 over the black letterbox, 7:1 over the paper. */
+.photo-tools {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.15rem;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.photo-tools button {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.photo-tools button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.photo-zoom-value {
+  min-width: 2.6rem;
+  text-align: center;
+  color: #fff;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .editor-form {
