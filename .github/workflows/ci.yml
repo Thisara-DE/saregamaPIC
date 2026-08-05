@@ -60,26 +60,31 @@ jobs:
         #     APIs are affected; this Vite SPA (createBrowserRouter) doesn't use them,
         #     and there's no fix on the react-router v7 line (v8 needs Node 22 / React
         #     19.2, blocked by the Node 20.8 pin).
-        #   GHSA-mh99-v99m-4gvg — brace-expansion DoS. The genuinely vulnerable v5
-        #     instances are bumped to the patched 5.0.8 in package-lock.json. The two
-        #     that still trip audit (1.1.16, 2.1.2) are the maintainer's *patched*
-        #     maintenance releases; npm audit collapses this multi-major advisory into
-        #     a single "<=5.0.7" range and false-positives them. Its only offered fix
-        #     is eslint v10 (major), blocked by the same Node 20.8 pin.
+        #   GHSA-mh99-v99m-4gvg — brace-expansion DoS. The v5 instances were bumped
+        #     to 5.0.8, which patches THIS advisory but is superseded by GHSA-rgw5
+        #     below — do not read "5.0.8" here as "safe overall". The two that still
+        #     trip audit (1.1.16, 2.1.2) are the maintainer's *patched* maintenance
+        #     releases; npm audit collapses this multi-major advisory into a single
+        #     "<=5.0.7" range and false-positives them. Its only offered fix is
+        #     eslint v10 (major), blocked by the same Node 20.8 pin.
         #   GHSA-rgw5-rvv9-x895 — brace-expansion DoS, follow-up to the above that
-        #     bypasses the CVE-2026-14257 mitigation. Unlike GHSA-mh99, the locked
-        #     1.1.16 / 2.1.2 ARE affected (fixes are 1.1.18 / 2.1.4 / 5.0.9). Accepted,
-        #     not patched: brace-expansion is build/lint tooling only (eslint, glob,
-        #     minimatch) and is never bundled into the deployed SPA, so this DoS is
-        #     unreachable in production; forcing the patched versions across the 1/2/5
-        #     majors in the tree via an override risks breaking minimatch. Revisit at
-        #     the next Node-unpin / eslint-major bump.
+        #     bypasses the CVE-2026-14257 mitigation. Fixes are 1.1.18 / 2.1.4 /
+        #     5.0.9, so ALL FOUR copies in package-lock.json are affected — 1.1.16
+        #     (brace-expansion), 2.1.2 (filelist), and 5.0.8 twice
+        #     (@typescript-eslint/typescript-estree, glob). Accepted, not patched.
+        #     THE LOAD-BEARING FACT: every one of those four is "dev": true in
+        #     package-lock.json, so none is bundled into the deployed SPA and the DoS
+        #     is unreachable in production — verify that flag, not the version list,
+        #     before trusting this entry. Forcing the patched versions across the
+        #     1/2/5 majors via an override risks breaking minimatch. Revisit at the
+        #     next Node-unpin / eslint-major bump.
         #   GHSA-7p8r-x3mc-p8w7 — fast-uri host confusion. Build-time only:
-        #     vite-plugin-pwa -> workbox-build -> ajv -> fast-uri, used to generate
-        #     the service worker at build. Not bundled into the deployed artifact and
-        #     never parses attacker-controlled URIs at app runtime, so it is
-        #     unreachable in production. Fold the patched fast-uri into the lockfile
-        #     at the next dependency bump (a fix exists) and drop this line then.
+        #     vite-plugin-pwa -> workbox-build -> ajv -> fast-uri (3.1.4, "dev": true),
+        #     used to generate the service worker at build. Not bundled into the
+        #     deployed artifact and never parses attacker-controlled URIs at app
+        #     runtime, so it is unreachable in production. A fix exists and this is a
+        #     SINGLE dev-only transitive, so an `overrides` bump is low-risk — prefer
+        #     patching it out and deleting this entry over carrying it indefinitely.
         run: |
           allow="https://github.com/advisories/GHSA-qwww-vcr4-c8h2
           https://github.com/advisories/GHSA-mh99-v99m-4gvg

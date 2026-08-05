@@ -559,8 +559,11 @@ button:disabled {
 }
 
 /* The original photo sits on black in BOTH themes: it is a photograph of white
-   paper, and against a light backdrop its edges dissolve into the page. The day
-   theme is a reading aid for the digital render, not a lightbox change. */
+   paper, and against a light backdrop its edges dissolve into the page.
+   CONSEQUENCE (finding F2): this pins the backdrop but not what floats over it.
+   Anything absolutely positioned over the stage — .viewer-nav today — must NOT
+   take its colours from the --v-* palette, because it can end up light-on-light
+   or dark-on-dark depending on theme AND on whether the photo letterboxes. */
 .viewer-stage:not(.digital) {
   background: #000;
 }
@@ -571,12 +574,22 @@ button:disabled {
   object-fit: contain;
 }
 
-.viewer-nav {
+/* Page-turn arrows. Deliberately OUTSIDE the theme palette (finding F2): these
+   float over the stage, so their backdrop is not the theme background — it is
+   whichever of the photo's white paper or the black letterbox happens to sit
+   behind them, and that flips with the device's orientation, not with the theme.
+   A fixed dark scrim + white glyph is legible on both (≈21:1 on the letterbox,
+   ≈7:1 on paper); using --v-surface/--v-fg gave 1.33:1 in day theme over the
+   letterbox, and the pre-existing night values were near-invisible on paper.
+   Doubled class = 0-2-0 so this cannot lose to .viewer-btn on a reorder. */
+.viewer-btn.viewer-nav {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
   font-size: 1.6rem;
   line-height: 1;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
 }
 
 .viewer-nav.prev {
@@ -680,30 +693,21 @@ button:disabled {
   font-size: 0.72rem;
 }
 
-/* Reading preferences (theme + text size) held together at the far right so
-   they hold their place while the key/octave/reset controls come and go. */
-.reading-prefs {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-left: auto;
-}
-
-/* Digital text-size stepper (A−/A+). */
+/* Digital text-size stepper (A−/A+). Pushed to the far right so it holds its
+   place while the key/octave/reset controls appear and disappear. */
 .text-size {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  margin-left: auto;
 }
 
-/* Day/night toggle for the digital render. Pressed = day theme active. */
-.viewer-btn.theme-btn {
-  min-height: 2rem;
-  min-width: auto;
-  font-size: 0.95rem;
-  padding: 0.25rem 0.55rem;
-}
-
+/* Day/night toggle. Lives in the viewer BAR, not the digital controls row
+   (finding F3): the theme is a viewer-wide preference that also repaints the
+   bar and the Original view's chrome, so it must be reachable from any page —
+   including one with no transcription, where the controls row never mounts.
+   Takes the default .viewer-btn size so it matches ✎/🗑 beside it.
+   Pressed = day theme active. */
 .viewer-btn.theme-btn.on {
   background: var(--v-on-bg);
   color: var(--v-on-fg);

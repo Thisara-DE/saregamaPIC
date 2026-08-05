@@ -220,6 +220,20 @@ export function PageViewer() {
             </button>
           </div>
         )}
+        {/* Theme toggle. One button, constant meaning: "day theme" —
+            aria-pressed carries the state, so the icon does not have to flip.
+            It sits in the bar rather than with the other reading preference
+            (text size) because the theme repaints the whole viewer, including
+            pages that have no transcription and so render no controls row. */}
+        <button
+          className={`viewer-btn theme-btn${theme === "day" ? " on" : ""}`}
+          onClick={toggleTheme}
+          aria-pressed={theme === "day"}
+          aria-label="Day theme"
+          title="Day theme — dark notes on paper, for bright rooms"
+        >
+          ☀
+        </button>
         <button
           className="viewer-btn"
           aria-label="Transcribe page"
@@ -323,44 +337,32 @@ export function PageViewer() {
               Reset
             </button>
           )}
-          {/* Reading preferences — pushed to the right so they stay put as the
-              key/octave controls appear and disappear. Both are about reading
-              this view at music-stand distance: how big, and light or dark. */}
-          <span className="reading-prefs">
-            {/* One button, constant meaning: "day theme". aria-pressed carries
-                the state, so the icon does not have to flip to say it. */}
+          {/* Text size — pushed to the right so it stays put as the key/octave
+              controls appear and disappear. Reading size at music-stand
+              distance. The theme toggle, the other reading preference, lives in
+              the bar instead; see the comment there. */}
+          <span className="text-size" role="group" aria-label="Text size">
             <button
-              className={`viewer-btn theme-btn${theme === "day" ? " on" : ""}`}
-              onClick={toggleTheme}
-              aria-pressed={theme === "day"}
-              aria-label="Day theme"
-              title="Day theme — dark notes on paper, for bright rooms"
+              className="viewer-btn size-btn"
+              onClick={() => stepDigitalScale(-1)}
+              disabled={digitalScale <= MIN_DIGITAL_SCALE}
+              aria-label="Smaller text"
+              title="Smaller text"
             >
-              ☀
+              A−
             </button>
-            <span className="text-size" role="group" aria-label="Text size">
-              <button
-                className="viewer-btn size-btn"
-                onClick={() => stepDigitalScale(-1)}
-                disabled={digitalScale <= MIN_DIGITAL_SCALE}
-                aria-label="Smaller text"
-                title="Smaller text"
-              >
-                A−
-              </button>
-              <span className="size-value" aria-live="polite">
-                {Math.round(digitalScale * 100)}%
-              </span>
-              <button
-                className="viewer-btn size-btn"
-                onClick={() => stepDigitalScale(1)}
-                disabled={digitalScale >= MAX_DIGITAL_SCALE}
-                aria-label="Larger text"
-                title="Larger text"
-              >
-                A+
-              </button>
+            <span className="size-value" aria-live="polite">
+              {Math.round(digitalScale * 100)}%
             </span>
+            <button
+              className="viewer-btn size-btn"
+              onClick={() => stepDigitalScale(1)}
+              disabled={digitalScale >= MAX_DIGITAL_SCALE}
+              aria-label="Larger text"
+              title="Larger text"
+            >
+              A+
+            </button>
           </span>
         </div>
       )}

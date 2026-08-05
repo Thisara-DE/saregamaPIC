@@ -369,6 +369,25 @@ describe("App", () => {
     expect(localStorage.getItem("saregamapic.viewerTheme")).toBe("night");
   });
 
+  // Finding F3: the theme repaints the whole viewer and persists, so its toggle
+  // must not be gated on the digital controls row — a page with no transcription
+  // renders no row, and used to open day-themed with no way back.
+  it("keeps the theme toggle reachable on a page with no transcription", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(detail)); // no transcription -> 404
+    const { container } = renderAt("/songs/abc123/pages/1");
+    await screen.findByText("Test Sinhala Song — 1 / 2");
+
+    // No Digital view to configure: no controls row, no text-size stepper.
+    expect(container.querySelector(".digital-controls")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Larger text" })).not.toBeInTheDocument();
+
+    // The theme toggle is still there, and still works.
+    const dayBtn = screen.getByRole("button", { name: "Day theme" });
+    fireEvent.click(dayBtn);
+    expect(container.querySelector(".viewer")).toHaveClass("theme-day");
+    expect(dayBtn).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("restores a persisted day theme, and keeps it across a page change", async () => {
     localStorage.setItem("saregamapic.viewerTheme", "day");
     vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
