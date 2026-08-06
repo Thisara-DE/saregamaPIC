@@ -37,11 +37,21 @@ _INK_LEVEL_FRACTION = 0.5
 # fill) — there are no ink rows to find, so return nothing rather than slicing
 # noise. 40 of 255 is a faint-but-real pencil stroke on paper.
 _MIN_CONTRAST = 40
-# An image row is part of a written line when at least this fraction of its width
-# is ink. A row of notes or lyrics covers well above this; blank paper sits near
-# zero. Low enough that a sparse line (a lone note, a short heading) still trips
-# it — a few percent of a wide row.
+# An image row is part of a written line when its ink fraction sits in this band.
+# The LOWER bound: a row of notes or lyrics covers well above it; blank paper sits
+# near zero. Low enough that a sparse line (a lone note, a short heading) still
+# trips it — a few percent of a wide row.
 _ROW_INK_FRACTION = 0.012
+# The UPPER bound (finding #9): a written row is SPARSE ink on paper — measured
+# across the real samples/ corpus, the densest row is ~0.11 of its width. A row
+# that is mostly ink is not writing but a solid dark region — the desk around the
+# paper in a phone capture, or a heavy full-width rule. Excluding those rows here,
+# at the source, stops a desk visible along ONE edge from forming a spurious band
+# that survives the height filters and skews every line's auto-scroll (the
+# _MAX_HEIGHT_FRACTION guard only catches a full surround, where the paper's own
+# rows are ink too). 0.5 sits far above real writing (~0.11) and far below a solid
+# region (~1.0).
+_ROW_INK_MAX_FRACTION = 0.5
 # Ink runs closer than this (as a fraction of image height) are merged into one
 # band: it stitches a note row back together with the octave dots and flat dashes
 # that sit just above and below it, which would otherwise read as their own thin
@@ -120,8 +130,13 @@ def detect_line_bands(im: Image.Image) -> list[Band]:
     # projection profile. The value is 255 x (ink fraction of that row).
     column = mask.resize((1, height), Image.Resampling.BOX)
     # One "L" byte per row (the column is 1px wide), so the raw bytes ARE the
-    # per-row averages, no per-pixel Python iteration to pull them out.
-    ink_per_row = [value >= _ROW_INK_FRACTION * 255 for value in column.tobytes()]
+    # per-row averages, no per-pixel Python iteration to pull them out. A row
+    # counts as writing when its ink fraction is in [_ROW_INK_FRACTION,
+    # _ROW_INK_MAX_FRACTION]: too little is blank paper, too much is a solid dark
+    # region (a desk edge), not a written line.
+    lo_ink = _ROW_INK_FRACTION * 255
+    hi_ink = _ROW_INK_MAX_FRACTION * 255
+    ink_per_row = [lo_ink <= value <= hi_ink for value in column.tobytes()]
 
     runs = _runs(ink_per_row)
     runs = _merge_gaps(runs, round(height * _MERGE_GAP_FRACTION))

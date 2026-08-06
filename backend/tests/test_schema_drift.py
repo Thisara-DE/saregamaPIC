@@ -2,11 +2,15 @@
 
 `frontend/src/api/types.ts` mirrors `backend/app/schemas.py` by hand — a
 deliberate choice while the API is small (no codegen toolchain). This test makes
-that choice safe for the status enums, which are the fields most likely to drift
-silently: it fails CI if a backend `Literal` set is not present verbatim as a
-string union in types.ts. It is one-directional (backend ⊆ frontend) — a backend
-status value with no matching TS union is the dangerous case, since the frontend
-would then receive a value its type says is impossible."""
+that choice safe for the status enums, the fields most likely to drift silently.
+
+It binds each backend `Literal` to the field(s) that must carry it, not just to
+the file (finding #10): `PageStatus` must appear as a `status:` field union at
+least twice (`Song.status` and `Scan.status`), and `TranscriptionStatus` must be
+the declared union of the `TranscriptionStatus` type alias. Comments are stripped
+first, so a union in prose can never satisfy the guard. Widening either
+`status:` site to `string` therefore fails CI, which the earlier
+"union present anywhere in the file" check could not see."""
 
 import re
 from typing import get_args
@@ -17,20 +21,34 @@ from app.schemas import PageStatus, TranscriptionStatus
 TYPES_TS = REPO_ROOT / "frontend" / "src" / "api" / "types.ts"
 
 
-def _ts_string_unions(text: str) -> list[frozenset[str]]:
-    """Every `"a" | "b" | ...` string-literal union in the TypeScript source, as
-    value sets (order- and whitespace-independent)."""
-    unions: list[frozenset[str]] = []
-    for match in re.finditer(r'"[^"]+"(?:\s*\|\s*"[^"]+")+', text):
-        unions.append(frozenset(re.findall(r'"([^"]+)"', match.group())))
-    return unions
+def _strip_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)  # block comments
+    text = re.sub(r"//[^\n]*", "", text)  # line comments
+    return text
 
 
-def test_status_enums_are_mirrored_in_frontend_types():
-    unions = _ts_string_unions(TYPES_TS.read_text(encoding="utf-8"))
-    for literal in (PageStatus, TranscriptionStatus):
-        want = frozenset(get_args(literal))
-        assert want in unions, (
-            f"backend status set {sorted(want)} has no matching string union in "
-            f"{TYPES_TS.name} — the hand-mirrored types have drifted (finding #7)"
-        )
+def _union_regex(literal: object) -> str:
+    """A whitespace-tolerant regex for the TS string union of a backend Literal,
+    values in declaration order (which the mirror keeps)."""
+    return r"\s*\|\s*".join(re.escape(f'"{value}"') for value in get_args(literal))
+
+
+def test_status_enums_are_field_bound_in_frontend_types():
+    src = _strip_comments(TYPES_TS.read_text(encoding="utf-8"))
+
+    # PageStatus is carried by BOTH Song.status and Scan.status, inline.
+    page_sites = re.findall(r"status\s*:\s*" + _union_regex(PageStatus), src)
+    assert len(page_sites) >= 2, (
+        f"PageStatus {sorted(get_args(PageStatus))} must be a `status:` union at "
+        f"Song.status AND Scan.status in {TYPES_TS.name}; found {len(page_sites)}. "
+        "The hand-mirrored types have drifted (finding #7/#10)."
+    )
+
+    # TranscriptionStatus is the declared union of its type alias.
+    assert re.search(
+        r"type\s+TranscriptionStatus\s*=\s*" + _union_regex(TranscriptionStatus),
+        src,
+    ), (
+        f"`export type TranscriptionStatus` must be "
+        f"{sorted(get_args(TranscriptionStatus))} in {TYPES_TS.name} — it has drifted."
+    )

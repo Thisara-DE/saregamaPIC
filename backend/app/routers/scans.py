@@ -52,8 +52,12 @@ def get_scan_thumbnail(scan_id: str, request: Request) -> FileResponse:
 
 @router.get("/scans/{scan_id}/preview")
 def get_scan_preview(scan_id: str, request: Request) -> FileResponse:
-    """A downscaled copy for the correction editor — legible marks without the
-    4000x3000 original's sluggishness. Pure cache; the original is untouched."""
+    """A downscaled copy of the scan (1600px). Two consumers: the correction
+    editor's photo pane (legible marks without the 4000x3000 original's
+    sluggishness) and, since #15, the viewer's first paint before the full-res
+    original loads. `detect_line_bands` also runs on this exact image, so its
+    dimensions are load-bearing for auto-scroll. Pure cache; the original is
+    untouched."""
     row = _scan_row(request, scan_id)
     data_dir = request.app.state.settings.data_dir
     if not (data_dir / row["image_path"]).is_file():

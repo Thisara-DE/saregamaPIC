@@ -347,11 +347,15 @@ def test_preview_downscales_and_leaves_original_untouched(client, settings):
 
 
 def _jpeg_with_bars(width: int, height: int, bars: list[tuple[int, int]]) -> bytes:
-    """A white JPEG with black full-width bars, for line-band detection."""
+    """A white JPEG with SPARSE dashed rows, for line-band detection. Dashed, not
+    solid: the detector treats a near-solid row as a desk edge, not writing
+    (finding #9), so a realistic row must be mostly paper (~25% ink here)."""
     im = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(im)
+    dash = max(1, width // 40)
     for top, bottom in bars:
-        draw.rectangle([0, top, width - 1, bottom - 1], fill="black")
+        for x in range(0, width, dash * 4):  # a dash then 3 dashes of gap ≈ 25% ink
+            draw.rectangle([x, top, min(x + dash, width) - 1, bottom - 1], fill="black")
     buf = io.BytesIO()
     im.save(buf, "JPEG")
     return buf.getvalue()

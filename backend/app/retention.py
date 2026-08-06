@@ -24,13 +24,9 @@ import time
 from datetime import UTC, datetime
 
 from .config import Settings
+from .security import LIMIT_EVENT_RETENTION_SECONDS
 
 logger = logging.getLogger("saregamapic")
-
-# security_limit_events already self-prunes to 48h inside _limited on each check;
-# this mirrors that window for the boot sweep (a process that never denies a
-# request never runs that DELETE, so old rows can still linger between deploys).
-_LIMIT_EVENT_RETENTION_SECONDS = 172_800
 
 
 def prune_expired(conn: sqlite3.Connection, settings: Settings) -> dict[str, int]:
@@ -58,9 +54,12 @@ def prune_expired(conn: sqlite3.Connection, settings: Settings) -> dict[str, int
         " WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
         (f"-{idempotency_days} days",),
     ).rowcount
+    # Belt-and-braces sweep of the same window _limited enforces on each check —
+    # a process that never denies a request never runs that DELETE, so old rows
+    # can still linger between deploys.
     security_limit_events = conn.execute(
         "DELETE FROM security_limit_events WHERE occurred_at < ?",
-        (int(time.time()) - _LIMIT_EVENT_RETENTION_SECONDS,),
+        (int(time.time()) - LIMIT_EVENT_RETENTION_SECONDS,),
     ).rowcount
     conn.commit()
 

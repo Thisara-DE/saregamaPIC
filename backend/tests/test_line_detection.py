@@ -1,9 +1,11 @@
 """Unit tests for the projection-profile line detector (finding #11 auto-scroll).
 
-Synthetic bars, not real sheets: these pin the algorithm's behaviour (run
-finding, gap merge, noise drop, blank page) so a refactor can't silently break
-it. Threshold tuning against the real hand-written corpus is a separate,
-login-gated follow-up noted in the module docstring."""
+Synthetic rows, not real sheets: these pin the algorithm's behaviour (run finding,
+gap merge, noise drop, blank page, and the two desk-capture failure modes F5/F9)
+so a refactor can't silently break it. Rows are drawn SPARSE, like real writing,
+because the detector now distinguishes a written row from a solid dark region by
+ink density (finding #9). Threshold tuning against the real hand-written corpus is
+a separate, login-gated follow-up noted in the module docstring."""
 
 from PIL import Image, ImageDraw
 
@@ -13,34 +15,23 @@ WIDTH, HEIGHT = 200, 1000
 
 
 def _sheet(bars: list[tuple[int, int]]) -> Image.Image:
-    """A white page with black full-width bars at the given (top, bottom) rows."""
+    """A white page with a written row at each (top, bottom).
+
+    Rows are drawn as SPARSE dashes (~30% of the width), not solid bars: a real
+    hand-written row is a few percent to ~0.1 of its width in ink (measured across
+    the samples/ corpus), and the detector now relies on that — a near-solid row
+    is a desk edge or a heavy rule, not writing (finding #9). A solid bar would be
+    (correctly) rejected as such, so the synthetic rows have to look like real ones."""
     im = Image.new("L", (WIDTH, HEIGHT), 255)
     draw = ImageDraw.Draw(im)
     for top, bottom in bars:
-        draw.rectangle([0, top, WIDTH - 1, bottom - 1], fill=0)
+        for x in range(0, WIDTH, 40):  # a 12px dash every 40px ≈ 30% ink coverage
+            draw.rectangle([x, top, min(x + 12, WIDTH) - 1, bottom - 1], fill=0)
     return im
 
 
 def _centres(bands: list[tuple[float, float]]) -> list[float]:
     return [(y0 + y1) / 2 for y0, y1 in bands]
-
-
-def _desk_sheet(
-    bars: list[tuple[int, int]], *, surround: int = 90, paper: int = 230
-) -> Image.Image:
-    """A phone photo, not a flatbed scan: a dark desk `surround` framing a lighter
-    `paper` rectangle, with black note bars on the paper.
-
-    This is the input class the pure-white ``_sheet`` helper structurally cannot
-    produce, and it is exactly the F5 failure: the dark surround pulls ``ink_level``
-    down until every image row — blank gaps included — reads as ink."""
-    im = Image.new("L", (WIDTH, HEIGHT), surround)
-    draw = ImageDraw.Draw(im)
-    margin_x, margin_y = WIDTH // 6, HEIGHT // 12
-    draw.rectangle([margin_x, margin_y, WIDTH - margin_x, HEIGHT - margin_y], fill=paper)
-    for top, bottom in bars:
-        draw.rectangle([margin_x, top, WIDTH - margin_x, bottom - 1], fill=0)
-    return im
 
 
 def test_finds_one_band_per_bar_in_order():
@@ -83,24 +74,40 @@ def test_empty_image_is_safe():
     assert detect_line_bands(Image.new("L", (0, 0))) == []
 
 
-def test_desk_surround_degrades_to_no_bands_not_one_full_page_band():
-    # F5: a phone photo with the desk visible around the paper drove ink_level low
-    # enough that every row read as ink, so the detector returned ONE band spanning
-    # the whole sheet — and the editor then re-centred the photo on every line
-    # focus, undoing the reader's own pan (strictly worse than not scrolling). The
-    # max-height guard must stop that: no band may span more than half the page.
-    # With the surround framing every row the whole sheet is one over-tall run, so
-    # it is dropped entirely, leaving the documented no-op path (no bands → the
-    # editor simply doesn't auto-scroll) rather than a misfiring giant band.
-    bands = detect_line_bands(_desk_sheet([(300, 340), (600, 640)]))
+def test_side_desk_surround_collapses_and_the_guard_drops_it():
+    # F5: a portrait phone capture with the desk showing down BOTH sides makes
+    # every image row read as ink (the side strips), so the whole sheet is one
+    # over-tall run. The _MAX_HEIGHT_FRACTION guard drops it, leaving the documented
+    # no-op (no bands → the editor simply doesn't auto-scroll) rather than one
+    # full-page band the editor would re-centre on every line focus.
+    im = Image.new("L", (WIDTH, HEIGHT), 255)
+    draw = ImageDraw.Draw(im)
+    draw.rectangle([0, 0, 14, HEIGHT - 1], fill=70)  # left desk strip, full height
+    draw.rectangle([WIDTH - 15, 0, WIDTH - 1, HEIGHT - 1], fill=70)  # right desk strip
+    bands = detect_line_bands(im)
     assert all(y1 - y0 <= 0.5 for y0, y1 in bands), bands
     assert bands == []
 
 
+def test_bottom_edge_desk_does_not_add_a_spurious_band():
+    # F9: the realistic one-handed capture — paper across the top, the desk showing
+    # along the bottom. The desk rows are near-solid ink (a written row is sparse),
+    # so the _ROW_INK_MAX_FRACTION bound rejects them at the source: the detector
+    # returns exactly the written rows, with NO extra band down at the desk that
+    # would shift bandForLine for every line.
+    im = _sheet([(100, 140), (300, 340), (500, 540)])  # three rows in the top 55%
+    draw = ImageDraw.Draw(im)
+    draw.rectangle([0, int(HEIGHT * 0.75), WIDTH - 1, HEIGHT - 1], fill=90)  # desk
+    bands = detect_line_bands(im)
+    assert len(bands) == 3, bands
+    assert max(y1 for _, y1 in bands) < 0.6  # every band is a written row, not the desk
+    assert _centres(bands) == sorted(_centres(bands))
+
+
 def test_over_tall_run_is_dropped():
-    # The direct unit for the guard: a single dark block covering most of the page
+    # The direct unit for the guard: a single ink region covering most of the page
     # (0.05..0.95 ≈ 0.9 of height > _MAX_HEIGHT_FRACTION) is not a line, so it is
-    # dropped — the same shape as the collapsed-desk run, minus the surround.
+    # dropped — the same shape as a collapsed capture, in isolation.
     assert detect_line_bands(_sheet([(50, 950)])) == []
 
 

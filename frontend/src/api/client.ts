@@ -202,8 +202,10 @@ export function scanThumbnailUrl(scanId: string): string {
   return `/api/scans/${scanId}/thumbnail`;
 }
 
-// Downscaled copy for the correction editor — legible marks without the
-// full-res original's sluggishness. The viewer still uses scanImageUrl.
+// Downscaled 1600px copy of the scan. Used by the editor's photo pane (legible
+// marks without the full-res original's sluggishness) and, since #15, by the
+// viewer's first paint (it then swaps in scanImageUrl). detect_line_bands also
+// runs on this image server-side, so its size is load-bearing for auto-scroll.
 export function scanPreviewUrl(scanId: string): string {
   return `/api/scans/${scanId}/preview`;
 }
