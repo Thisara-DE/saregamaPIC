@@ -4,8 +4,11 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from PIL import Image
 
 from ..auth import current_user_id
+from ..line_detection import detect_line_bands
+from ..schemas import LineBand, LineBands
 from ..security import enforce_limit, security_event
 from ..storage import delete_scan_files, ensure_preview, ensure_thumbnail
 
@@ -61,6 +64,27 @@ def get_scan_preview(scan_id: str, request: Request) -> FileResponse:
             status_code=415, detail="Cannot decode this image format for preview"
         )
     return FileResponse(preview, media_type="image/webp")
+
+
+@router.get("/scans/{scan_id}/line-bands", response_model=LineBands)
+def get_scan_line_bands(scan_id: str, request: Request) -> LineBands:
+    """Normalized vertical bands of the written rows, for the editor's per-line
+    photo auto-scroll (finding #11).
+
+    Detection runs on the SAME cached preview the editor renders, so the bands
+    line up with the on-screen image without any coordinate conversion. Bands are
+    a pure function of the pixels — nothing is stored, and an undecodable image
+    just yields no bands (the editor then doesn't auto-scroll, rather than erroring)."""
+    row = _scan_row(request, scan_id)
+    data_dir = request.app.state.settings.data_dir
+    if not (data_dir / row["image_path"]).is_file():
+        raise HTTPException(status_code=404, detail="Image file missing from data dir")
+    preview = ensure_preview(data_dir, row["image_path"], scan_id)
+    if preview is None:
+        return LineBands(bands=[])
+    with Image.open(preview) as im:
+        bands = detect_line_bands(im)
+    return LineBands(bands=[LineBand(y0=y0, y1=y1) for y0, y1 in bands])
 
 
 @router.delete("/scans/{scan_id}", status_code=204)

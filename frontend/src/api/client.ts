@@ -4,6 +4,7 @@
 import type {
   AuthUser,
   Health,
+  LineBands,
   Scan,
   Song,
   SongDetail,
@@ -186,6 +187,11 @@ export function saveTranscription(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stf, status }),
   });
+}
+
+// Detected ink-row bands for the editor's per-line photo auto-scroll (#11).
+export function getLineBands(scanId: string): Promise<LineBands> {
+  return request<LineBands>(`/api/scans/${scanId}/line-bands`);
 }
 
 export function scanImageUrl(scanId: string): string {

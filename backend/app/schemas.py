@@ -74,6 +74,22 @@ class Health(BaseModel):
     version: str
 
 
+# --- Per-line photo bands (editor auto-scroll, finding #11) ---
+# Computed on demand from the scan image, never stored: a band is a pure function
+# of the pixels, so there's no schema/STF change and no re-recognition. Both
+# coordinates are normalized to [0, 1] of image height, so they map onto whatever
+# downscaled copy the editor renders. Mirror in frontend/src/api/types.ts by hand.
+
+
+class LineBand(BaseModel):
+    y0: float  # normalized top of a written row
+    y1: float  # normalized bottom
+
+
+class LineBands(BaseModel):
+    bands: list[LineBand] = []
+
+
 # --- Transcriptions (STF) — mirror in frontend/src/api/types.ts by hand ---
 
 

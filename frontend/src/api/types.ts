@@ -44,6 +44,18 @@ export interface Health {
   version: string;
 }
 
+// Per-line photo bands for the editor's auto-scroll (finding #11). Computed on
+// demand from the scan, never stored; y0/y1 are normalized to [0,1] of image
+// height. Mirror backend/app/schemas.py by hand.
+export interface LineBand {
+  y0: number;
+  y1: number;
+}
+
+export interface LineBands {
+  bands: LineBand[];
+}
+
 export interface AuthUser {
   id: string;
   email: string;

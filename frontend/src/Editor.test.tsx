@@ -63,6 +63,11 @@ function routeFetch(routes: Record<string, unknown>) {
         }),
       );
     }
+    // The editor fetches per-line photo bands on load (#11 auto-scroll). Default
+    // to none so every editor test keeps working; a test can override this key.
+    if (method === "GET" && url.endsWith("/line-bands") && !(key in routes)) {
+      return Promise.resolve(Response.json({ bands: [] }));
+    }
     if (key in routes) {
       const body = routes[key];
       if (body === 404) {
@@ -359,6 +364,36 @@ describe("EditorPage photo pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fit the photo" }));
     expect(screen.getByText("100%")).toBeInTheDocument();
     expect(zoomOut).toBeDisabled();
+  });
+
+  it("fetches the sheet's line bands on load and survives a line focus", async () => {
+    // The pan maths itself is unit-tested (photoZoom/lineBands); jsdom has no
+    // layout to scroll, so here we only prove the wiring: the bands endpoint is
+    // hit once per page, and focusing a line runs the handler without throwing.
+    const fetchMock = routeFetch({
+      "GET /api/songs/abc123": detail,
+      "GET /api/scans/scan1/transcription": transcription,
+      "GET /api/scans/scan1/line-bands": {
+        bands: [
+          { y0: 0, y1: 0.1 },
+          { y0: 0.5, y1: 0.6 },
+        ],
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByDisplayValue("S R_ M^ S'");
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          (typeof input === "string" ? input : (input as URL).toString()).endsWith(
+            "/scans/scan1/line-bands",
+          ),
+        ),
+      ).toBe(true),
+    );
+    fireEvent.focus(screen.getByLabelText("Line 1 text")); // must not throw
   });
 });
 

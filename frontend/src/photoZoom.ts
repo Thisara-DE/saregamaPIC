@@ -90,6 +90,25 @@ export function fitTransform(fit: Fit): Transform {
   return clampPan(IDENTITY, fit);
 }
 
+/**
+ * Bring a normalized image band [y0, y1] (fractions of the image's own height)
+ * into view by panning at the CURRENT scale — finding #11's per-line auto-scroll:
+ * focus an STF line, the photo scrolls that line's row to the middle.
+ *
+ * A band already fully visible is left exactly where it is (returns `t`
+ * unchanged), so tabbing between two lines that are both on screen never jerks
+ * the photo; a band off the top or bottom is centred. Zoom is never touched —
+ * the reader's chosen magnification stays, only the vertical position moves — and
+ * the result is clamped, so a band near an edge settles flush without black.
+ */
+export function bandIntoView(t: Transform, y0: number, y1: number, fit: Fit): Transform {
+  const top = t.y + y0 * fit.imageH * t.scale;
+  const bottom = t.y + y1 * fit.imageH * t.scale;
+  if (top >= 0 && bottom <= fit.paneH) return t; // already fully on screen
+  const centre = ((y0 + y1) / 2) * fit.imageH;
+  return clampPan({ scale: t.scale, x: t.x, y: fit.paneH / 2 - centre * t.scale }, fit);
+}
+
 export function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }

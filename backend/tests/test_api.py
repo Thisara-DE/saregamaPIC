@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.config import Settings
 from app.main import create_app
@@ -313,6 +313,47 @@ def test_preview_downscales_and_leaves_original_untouched(client, settings):
 
     assert client.get(f"/api/scans/{scan['id']}/preview").status_code == 200  # cached
     assert client.get("/api/scans/nope/preview").status_code == 404
+
+
+def _jpeg_with_bars(width: int, height: int, bars: list[tuple[int, int]]) -> bytes:
+    """A white JPEG with black full-width bars, for line-band detection."""
+    im = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(im)
+    for top, bottom in bars:
+        draw.rectangle([0, top, width - 1, bottom - 1], fill="black")
+    buf = io.BytesIO()
+    im.save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_line_bands_detected_from_preview(client):
+    song_id = client.post("/api/songs", json={"title": "Bands"}).json()["id"]
+    # three well-separated rows on a portrait sheet
+    bars = [(200, 260), (700, 760), (1200, 1260)]
+    scan = _upload(client, song_id, _jpeg_with_bars(1000, 1500, bars))
+
+    r = client.get(f"/api/scans/{scan['id']}/line-bands")
+    assert r.status_code == 200
+    bands = r.json()["bands"]
+    assert len(bands) == 3
+    # normalized, ordered top-to-bottom, non-overlapping, roughly on each bar
+    centres = [(b["y0"] + b["y1"]) / 2 for b in bands]
+    assert centres == sorted(centres)
+    assert all(0.0 <= b["y0"] < b["y1"] <= 1.0 for b in bands)
+    assert abs(centres[0] - 200 / 1500) < 0.03
+    assert abs(centres[2] - 1230 / 1500) < 0.03
+
+
+def test_line_bands_blank_page_is_empty_not_an_error(client):
+    song_id = client.post("/api/songs", json={"title": "Blank"}).json()["id"]
+    scan = _upload(client, song_id, _jpeg_bytes(1000, 1400))
+    r = client.get(f"/api/scans/{scan['id']}/line-bands")
+    assert r.status_code == 200
+    assert r.json()["bands"] == []
+
+
+def test_line_bands_unknown_scan_404(client):
+    assert client.get("/api/scans/nope/line-bands").status_code == 404
 
 
 def test_delete_scan_renumbers_and_removes_files(client, settings):

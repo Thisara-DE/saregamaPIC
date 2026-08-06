@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bandIntoView,
   clampPan,
   clampScale,
   distance,
@@ -13,6 +14,7 @@ import {
   zoomAbout,
   zoomTo,
   type Fit,
+  type Transform,
 } from "./photoZoom";
 
 // A phone: a 38vh pane with a portrait sheet fitted to its width, so the photo
@@ -136,5 +138,37 @@ describe("pointer geometry", () => {
   it("measures the spread and midpoint of two fingers", () => {
     expect(distance({ x: 0, y: 0 }, { x: 3, y: 4 })).toBe(5);
     expect(midpoint({ x: 0, y: 10 }, { x: 20, y: 30 })).toEqual({ x: 10, y: 20 });
+  });
+});
+
+describe("bandIntoView (per-line auto-scroll)", () => {
+  // phone: image 480 tall in a 280 pane, so at scale 1 the pane shows image
+  // rows 0..280 and a lower band is off-screen.
+  it("leaves a band that is already fully visible exactly where it is", () => {
+    // image rows 48..96 at IDENTITY — well inside the visible 0..280
+    expect(bandIntoView(IDENTITY, 0.1, 0.2, phone)).toBe(IDENTITY);
+  });
+
+  it("scrolls a band off the bottom into view, clamped flush to the edge", () => {
+    // last row (image 432..480) → bottom-locked, no black below it
+    const t = bandIntoView(IDENTITY, 0.9, 1.0, phone);
+    expect(t).toEqual({ scale: 1, x: 0, y: -200 });
+    // the band now sits inside the pane
+    const top = t.y + 0.9 * phone.imageH * t.scale;
+    const bottom = t.y + 1.0 * phone.imageH * t.scale;
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(bottom).toBeLessThanOrEqual(phone.paneH);
+  });
+
+  it("scrolls back up to a band off the top", () => {
+    const bottomLocked: Transform = { scale: 1, x: 0, y: -200 };
+    expect(bandIntoView(bottomLocked, 0.0, 0.05, phone).y).toBe(0);
+  });
+
+  it("keeps the current zoom, only moving vertically", () => {
+    const zoomed: Transform = { scale: 2, x: -50, y: -100 };
+    const t = bandIntoView(zoomed, 0.9, 1.0, phone);
+    expect(t.scale).toBe(2);
+    expect(t.x).toBe(-50); // horizontal position untouched
   });
 });

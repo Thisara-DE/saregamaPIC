@@ -9,6 +9,7 @@ import {
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
+  getLineBands,
   getSong,
   getTranscription,
   recognizeScan,
@@ -17,7 +18,9 @@ import {
   scanPreviewUrl,
 } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
+import { bandForLine, type Band } from "../lineBands";
 import {
+  bandIntoView,
   DOUBLE_TAP_SCALE,
   distance,
   fitTransform,
@@ -180,6 +183,36 @@ export function EditorPage() {
     setZoom(IDENTITY);
     setPannable(false);
   }, [scanId]);
+
+  // The sheet's detected ink rows, for the per-line auto-scroll. A pure function
+  // of the scan image (computed server-side, nothing stored), so fetched once per
+  // page. Failure is silent: auto-scroll is a convenience, and without bands the
+  // editor just behaves as it did before this feature.
+  const [bands, setBands] = useState<Band[]>([]);
+  useEffect(() => {
+    if (!scanId) return;
+    let cancelled = false;
+    setBands([]);
+    getLineBands(scanId)
+      .then((r) => {
+        if (!cancelled) setBands(r.bands);
+      })
+      .catch(() => {
+        /* no bands → no auto-scroll, which is fine */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scanId]);
+
+  // Pan the photo so line `i`'s row is in view when the reader focuses it. Skipped
+  // when the pane is hidden or bands haven't loaded; bandIntoView leaves a line
+  // that's already on screen exactly where it is (no jump between adjacent lines).
+  function scrollToLine(i: number) {
+    if (!photoOpen) return;
+    const band = bandForLine(bands, i, stf.lines.length);
+    if (band) applyZoom(bandIntoView(zoomRef.current, band.y0, band.y1, readFit()));
+  }
 
   function togglePhoto() {
     const next = !photoOpen;
@@ -665,6 +698,7 @@ export function EditorPage() {
                     onFocus={(e) => {
                       setActiveLine(i);
                       activeInputRef.current = e.currentTarget;
+                      scrollToLine(i);
                     }}
                     onBlur={() => setActiveLine((cur) => (cur === i ? null : cur))}
                     onChange={(e) => setLine(i, { text: e.target.value })}
