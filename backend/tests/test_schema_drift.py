@@ -8,9 +8,10 @@ It binds each backend `Literal` to the field(s) that must carry it, not just to
 the file (finding #10): `PageStatus` must appear as a `status:` field union at
 least twice (`Song.status` and `Scan.status`), and `TranscriptionStatus` must be
 the declared union of the `TranscriptionStatus` type alias. Comments are stripped
-first, so a union in prose can never satisfy the guard. Widening either
-`status:` site to `string` therefore fails CI, which the earlier
-"union present anywhere in the file" check could not see."""
+first, so a union in prose can never satisfy the guard. Each union is anchored to
+its `;` terminator (finding #15), so an ADDITIVE widening
+(`"new" | "draft" | "reviewed" | string`, which TypeScript collapses to `string`)
+fails too, not only a wholesale replacement."""
 
 import re
 from typing import get_args
@@ -29,8 +30,10 @@ def _strip_comments(text: str) -> str:
 
 def _union_regex(literal: object) -> str:
     """A whitespace-tolerant regex for the TS string union of a backend Literal,
-    values in declaration order (which the mirror keeps)."""
-    return r"\s*\|\s*".join(re.escape(f'"{value}"') for value in get_args(literal))
+    values in declaration order (which the mirror keeps), anchored to its `;`
+    terminator so an extra `| string` alternative after it does NOT match."""
+    body = r"\s*\|\s*".join(re.escape(f'"{value}"') for value in get_args(literal))
+    return body + r"\s*;"
 
 
 def test_status_enums_are_field_bound_in_frontend_types():
@@ -41,7 +44,7 @@ def test_status_enums_are_field_bound_in_frontend_types():
     assert len(page_sites) >= 2, (
         f"PageStatus {sorted(get_args(PageStatus))} must be a `status:` union at "
         f"Song.status AND Scan.status in {TYPES_TS.name}; found {len(page_sites)}. "
-        "The hand-mirrored types have drifted (finding #7/#10)."
+        "The hand-mirrored types have drifted (finding #7/#10/#15)."
     )
 
     # TranscriptionStatus is the declared union of its type alias.
