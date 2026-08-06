@@ -25,6 +25,24 @@ def _centres(bands: list[tuple[float, float]]) -> list[float]:
     return [(y0 + y1) / 2 for y0, y1 in bands]
 
 
+def _desk_sheet(
+    bars: list[tuple[int, int]], *, surround: int = 90, paper: int = 230
+) -> Image.Image:
+    """A phone photo, not a flatbed scan: a dark desk `surround` framing a lighter
+    `paper` rectangle, with black note bars on the paper.
+
+    This is the input class the pure-white ``_sheet`` helper structurally cannot
+    produce, and it is exactly the F5 failure: the dark surround pulls ``ink_level``
+    down until every image row — blank gaps included — reads as ink."""
+    im = Image.new("L", (WIDTH, HEIGHT), surround)
+    draw = ImageDraw.Draw(im)
+    margin_x, margin_y = WIDTH // 6, HEIGHT // 12
+    draw.rectangle([margin_x, margin_y, WIDTH - margin_x, HEIGHT - margin_y], fill=paper)
+    for top, bottom in bars:
+        draw.rectangle([margin_x, top, WIDTH - margin_x, bottom - 1], fill=0)
+    return im
+
+
 def test_finds_one_band_per_bar_in_order():
     bands = detect_line_bands(_sheet([(100, 140), (400, 440), (800, 860)]))
     assert len(bands) == 3
@@ -63,6 +81,27 @@ def test_tiny_speck_is_dropped_as_noise():
 
 def test_empty_image_is_safe():
     assert detect_line_bands(Image.new("L", (0, 0))) == []
+
+
+def test_desk_surround_degrades_to_no_bands_not_one_full_page_band():
+    # F5: a phone photo with the desk visible around the paper drove ink_level low
+    # enough that every row read as ink, so the detector returned ONE band spanning
+    # the whole sheet — and the editor then re-centred the photo on every line
+    # focus, undoing the reader's own pan (strictly worse than not scrolling). The
+    # max-height guard must stop that: no band may span more than half the page.
+    # With the surround framing every row the whole sheet is one over-tall run, so
+    # it is dropped entirely, leaving the documented no-op path (no bands → the
+    # editor simply doesn't auto-scroll) rather than a misfiring giant band.
+    bands = detect_line_bands(_desk_sheet([(300, 340), (600, 640)]))
+    assert all(y1 - y0 <= 0.5 for y0, y1 in bands), bands
+    assert bands == []
+
+
+def test_over_tall_run_is_dropped():
+    # The direct unit for the guard: a single dark block covering most of the page
+    # (0.05..0.95 ≈ 0.9 of height > _MAX_HEIGHT_FRACTION) is not a line, so it is
+    # dropped — the same shape as the collapsed-desk run, minus the surround.
+    assert detect_line_bands(_sheet([(50, 950)])) == []
 
 
 def test_runs_and_merge_gaps_helpers():

@@ -429,6 +429,45 @@ describe("EditorPage title editing", () => {
   });
 });
 
+describe("EditorPage line delete undo (#12)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("restores a deleted line at its original position when Undo is pressed", async () => {
+    const twoLines: Transcription = {
+      ...transcription,
+      stf: {
+        header: transcription.stf.header,
+        lines: [
+          { n: 1, kind: "sargam", text: "S R G" },
+          { n: 2, kind: "lyric", text: "hello" },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      routeFetch({
+        "GET /api/songs/abc123": detail,
+        "GET /api/scans/scan1/transcription": twoLines,
+      }),
+    );
+    renderAt("/songs/abc123/pages/1/edit");
+    await screen.findByRole("textbox", { name: "Line 1 text" });
+    expect(screen.getByDisplayValue("hello")).toBeTruthy();
+
+    // Delete the first line: it is gone and the remaining line renumbers to 1,
+    // but an Undo offer appears.
+    fireEvent.click(screen.getByRole("button", { name: "Delete line 1" }));
+    expect(screen.queryByDisplayValue("S R G")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(/deleted/i);
+
+    // Undo brings it back with both lines present, and the offer clears.
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByDisplayValue("S R G")).toBeTruthy();
+    expect(screen.getByDisplayValue("hello")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+});
+
 describe("EditorPage save confirmation", () => {
   beforeEach(() => vi.restoreAllMocks());
 

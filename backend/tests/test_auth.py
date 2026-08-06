@@ -88,14 +88,20 @@ def test_auth_rejects_missing_session_and_cross_origin_mutation(
     auth_client, auth_settings
 ):
     assert auth_client.get("/api/health").status_code == 200
-    assert auth_client.get("/api/songs").status_code == 401
+    # The 401/403 early returns still carry X-Request-ID, so a denied request is
+    # traceable to its security_event log line just like a served one.
+    unauth = auth_client.get("/api/songs")
+    assert unauth.status_code == 401
+    assert len(unauth.headers["x-request-id"]) == 32
 
     owner_id = _activate_user(
         auth_settings, "owner@example.com", INITIAL_OWNER_ID
     )
     _as(auth_client, _session(auth_settings, owner_id))
     assert auth_client.get("/api/songs").status_code == 200
-    assert auth_client.post("/api/songs", json={"title": "No origin"}).status_code == 403
+    cross_origin = auth_client.post("/api/songs", json={"title": "No origin"})
+    assert cross_origin.status_code == 403
+    assert len(cross_origin.headers["x-request-id"]) == 32
     assert _post(auth_client, "/api/songs", json={"title": "Allowed"}).status_code == 201
 
 

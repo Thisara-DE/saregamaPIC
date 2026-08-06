@@ -15,6 +15,11 @@ logger = logging.getLogger("saregamapic.security")
 
 _LOG_FORMAT = "%(asctime)sZ %(levelname)s %(name)s %(message)s"
 
+# How long a rate/quota event is retained. `_limited` sweeps rows past this on
+# every check; the boot-time prune in retention.py imports THIS constant rather
+# than restating the number, so the "retention window" is defined once (finding #8).
+LIMIT_EVENT_RETENTION_SECONDS = 172_800  # 48 hours
+
 
 def configure_logging(level: str) -> None:
     """Give the "saregamapic" logger tree a real stdout handler.
@@ -92,7 +97,7 @@ def _limited(
     cutoff = now - window_seconds
     conn.execute(
         "DELETE FROM security_limit_events WHERE occurred_at < ?",
-        (now - 172_800,),
+        (now - LIMIT_EVENT_RETENTION_SECONDS,),
     )
     count = conn.execute(
         "SELECT COUNT(*) AS n FROM security_limit_events"

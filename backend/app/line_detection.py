@@ -50,6 +50,20 @@ _MERGE_GAP_FRACTION = 0.015
 # Runs shorter than this (fraction of image height) are dropped as specks —
 # eraser crumbs, bleed-through, a stray dot — not lines.
 _MIN_HEIGHT_FRACTION = 0.006
+# Runs taller than this (fraction of image height) are dropped: no single written
+# row on a sargam sheet is half the page. This is the guard against the phone-
+# capture failure — a scan taken on a desk (`<input capture="environment">`, not a
+# flatbed) puts a dark surround around the paper, which drives `ink_level` low
+# enough that EVERY image row (blank gaps included) reads as ink. The whole sheet
+# then collapses to one run spanning (0, height); without this cap that came back
+# as a single full-page "band" that the editor re-centred on for every line focus,
+# jerking the reader's own pan away on each tab — strictly worse than not
+# auto-scrolling at all. Dropping the giant run puts that case back on the
+# documented no-op path (no bands → the editor simply doesn't auto-scroll). The
+# real samples/ scans top out at a 0.34-tall band, so 0.5 never touches a genuine
+# row. Making desk photos produce USEFUL bands (paper-region detection) is the
+# owed real-corpus tuning pass, not this guard.
+_MAX_HEIGHT_FRACTION = 0.5
 
 # Band = (y0, y1) normalized to [0, 1] of image height, top-to-bottom.
 Band = tuple[float, float]
@@ -112,5 +126,6 @@ def detect_line_bands(im: Image.Image) -> list[Band]:
     runs = _runs(ink_per_row)
     runs = _merge_gaps(runs, round(height * _MERGE_GAP_FRACTION))
     min_height = max(1, round(height * _MIN_HEIGHT_FRACTION))
-    runs = [(a, b) for a, b in runs if b - a >= min_height]
+    max_height = height * _MAX_HEIGHT_FRACTION
+    runs = [(a, b) for a, b in runs if min_height <= b - a <= max_height]
     return [(a / height, b / height) for a, b in runs]

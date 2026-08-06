@@ -28,6 +28,7 @@ from .auth import (
 )
 from .config import APP_VERSION, Settings
 from .recognition import Recognizer, make_recognizer
+from .retention import prune_expired
 from .routers import learning, scans, songs, transcriptions
 from .schemas import Health
 from .security import configure_logging
@@ -82,6 +83,12 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
         conn = db.connect(settings.db_path)
         try:
             prepare_initial_owner(conn, settings)
+            # Opportunistic retention prune (finding #5). Non-fatal: a prune that
+            # can't run must never stop the app from serving.
+            try:
+                prune_expired(conn, settings)
+            except sqlite3.Error:
+                logger.warning("startup retention prune failed", exc_info=True)
         finally:
             conn.close()
         yield
@@ -103,9 +110,22 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     async def db_and_auth(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        request.state.request_id = uuid.uuid4().hex
+
+        def with_request_id(response: Response) -> Response:
+            response.headers["X-Request-ID"] = request.state.request_id
+            return response
+
+        # Static assets — the SPA shell, /assets/*.js, icons, the service worker —
+        # touch neither the database nor the session. Opening a SQLite connection
+        # (which runs two PRAGMAs) and, with auth on, a session SELECT for every
+        # one of them was pure overhead; only /api/* needs the connection and the
+        # auth gate. The connection lives no longer than the request either way.
+        if not request.url.path.startswith("/api/"):
+            return with_request_id(await call_next(request))
+
         conn: sqlite3.Connection = db.connect(settings.db_path)
         request.state.db = conn
-        request.state.request_id = uuid.uuid4().hex
         try:
             session_token = request.cookies.get(SESSION_COOKIE)
             authenticated_session = None
@@ -119,13 +139,17 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
                     "/api/auth/login",
                     "/api/auth/callback",
                 }
-                if request.url.path.startswith("/api/") and not public_path:
+                if not public_path:
                     if request.state.user_id is None:
-                        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                        return with_request_id(
+                            JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                        )
                     try:
                         require_same_origin(request, settings)
                     except StarletteHTTPException as exc:
-                        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+                        return with_request_id(
+                            JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+                        )
             else:
                 request.state.user_id = INITIAL_OWNER_ID
             response = await call_next(request)
@@ -135,8 +159,7 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
                 and session_token is not None
             ):
                 renew_session(conn, session_token, settings, response)
-            response.headers["X-Request-ID"] = request.state.request_id
-            return response
+            return with_request_id(response)
         finally:
             conn.close()
 
