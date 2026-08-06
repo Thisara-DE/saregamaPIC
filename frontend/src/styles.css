@@ -363,7 +363,8 @@ button:disabled {
   border: 0;
 }
 
-.save-confirm {
+.save-confirm,
+.undo-toast {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -373,6 +374,13 @@ button:disabled {
   border-radius: 0.6rem;
   background: var(--card);
   color: var(--muted);
+}
+
+/* The Undo offer sits between the line list and the actions; its link is the
+   accent colour so it reads as the actionable thing in the row. */
+.undo-toast .button-link {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .song-cover {

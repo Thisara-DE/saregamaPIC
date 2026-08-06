@@ -302,6 +302,13 @@ describe("App", () => {
     expect(screen.queryByRole("img", { name: /Page 2 of/ })).not.toBeInTheDocument();
     // The photo is still one tap away — the fidelity rule's original.
     fireEvent.click(screen.getByRole("button", { name: "Original" }));
+    // #15: the 1600px preview paints first, then the full-res original swaps in
+    // once it loads.
+    expect(screen.getByRole("img", { name: /Page 2 of/ })).toHaveAttribute(
+      "src",
+      "/api/scans/scan2/preview",
+    );
+    fireEvent.load(document.querySelector('img[src="/api/scans/scan2/image"]')!);
     expect(screen.getByRole("img", { name: /Page 2 of/ })).toHaveAttribute(
       "src",
       "/api/scans/scan2/image",
@@ -413,6 +420,13 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText("Test Sinhala Song — 2 / 2")).toBeInTheDocument();
     });
+    // #15: the preview paints first (never the thumbnail), then the full-res
+    // original swaps in once it loads.
+    expect(screen.getByRole("img", { name: /Page 2 of/ })).toHaveAttribute(
+      "src",
+      "/api/scans/scan2/preview",
+    );
+    fireEvent.load(document.querySelector('img[src="/api/scans/scan2/image"]')!);
     expect(screen.getByRole("img", { name: /Page 2 of/ })).toHaveAttribute(
       "src",
       "/api/scans/scan2/image",

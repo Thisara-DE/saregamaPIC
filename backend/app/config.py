@@ -97,6 +97,20 @@ class Settings:
             os.environ.get("SAREGAMAPIC_TRANSCRIPTION_SAVE_QUOTA_DAY", "2000")
         )
     )
+    # Retention windows for the startup prune (finding #5). Sessions and
+    # recognition-idempotency rows accumulate forever otherwise; the app sweeps
+    # them opportunistically on boot. Env-configurable precisely so a future
+    # scheduled/cron prune (the scaling path) can reuse the same knobs.
+    session_revoked_retention_days: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_SESSION_REVOKED_RETENTION_DAYS", "7")
+        )
+    )
+    recognition_idempotency_retention_days: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_RECOGNITION_IDEMPOTENCY_RETENTION_DAYS", "7")
+        )
+    )
     # Railway captures container stdout/stderr as-is; this only controls what
     # "saregamapic" (incl. "saregamapic.security") emits into that stream.
     log_level: str = field(

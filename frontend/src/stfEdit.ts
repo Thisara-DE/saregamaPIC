@@ -8,9 +8,9 @@
 // advisory validator to flag, matching the app's "flag, don't silently fix"
 // rule. Only M is ever sharp; only R G D N are ever flat.
 
-export type Mark = "_" | "^" | "'" | ",";
+import { noteTokenRegex } from "./stfGrammar";
 
-const NOTE_TOKEN_RE = /[SRGMPDN][_^',]*/g;
+export type Mark = "_" | "^" | "'" | ",";
 
 /**
  * The note token the caret sits in (or on the edge of), else the nearest note
@@ -20,8 +20,8 @@ const NOTE_TOKEN_RE = /[SRGMPDN][_^',]*/g;
 export function noteTokenAt(text: string, caret: number): [number, number] | null {
   let best: [number, number] | null = null;
   let m: RegExpExecArray | null;
-  NOTE_TOKEN_RE.lastIndex = 0;
-  while ((m = NOTE_TOKEN_RE.exec(text)) !== null) {
+  const noteRe = noteTokenRegex();
+  while ((m = noteRe.exec(text)) !== null) {
     const start = m.index;
     const end = start + m[0].length;
     if (caret >= start && caret <= end) return [start, end]; // inside or on an edge

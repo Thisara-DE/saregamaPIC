@@ -30,7 +30,11 @@ FLAT_ALLOWED = {"R", "G", "D", "N"}
 _NOTE_BASE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
 # A sargam note token: a letter, then any mix of octave dots and one accidental.
-_NOTE_RE = re.compile(r"[SRGMPDN][_^',]*")
+# The one source of the note-token grammar on the backend — `learning.py` imports
+# this pattern rather than re-spelling it, and the frontend mirrors it in
+# `frontend/src/stfGrammar.ts` (cross-language, so one-per-language, cross-referenced).
+NOTE_TOKEN_PATTERN = r"[SRGMPDN][_^',]*"
+_NOTE_RE = re.compile(NOTE_TOKEN_PATTERN)
 # Any OTHER capital letter in a note line is not sargam — almost always a
 # recognition misread (e.g. B for R). Flag it loudly.
 _ALIEN_LETTER_RE = re.compile(r"[A-Z]")

@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ApiError, deleteScan, getSong, getTranscription, scanImageUrl } from "../api/client";
+import {
+  ApiError,
+  deleteScan,
+  getSong,
+  getTranscription,
+  scanImageUrl,
+  scanPreviewUrl,
+} from "../api/client";
+import { ProgressiveImage } from "../components/ProgressiveImage";
 import { StfLineText } from "../components/StfLineText";
 import { readPref, writePref } from "../prefs";
+import { NOTE_KINDS } from "../stfGrammar";
 import {
   pitchClassName,
   scalePitchClass,
@@ -358,8 +367,13 @@ export function PageViewer() {
 
       {scan && view === "original" && (
         <div className="viewer-stage">
-          <img
-            src={scanImageUrl(scan.id)}
+          {/* Paint the 1600px preview first, then swap in the full-res original
+              when it loads (#15) — the stored 4000×3000 scan is a multi-second
+              blank over cellular. */}
+          <ProgressiveImage
+            key={scan.id}
+            preview={scanPreviewUrl(scan.id)}
+            full={scanImageUrl(scan.id)}
             alt={`Page ${page} of ${song?.title || "Untitled song"}`}
           />
         </div>
@@ -421,7 +435,3 @@ export function PageViewer() {
     </div>
   );
 }
-
-// Note-bearing line kinds get the faithful arc/mark render; the rest are free
-// text (mirrors backend _NOTE_KINDS + the editor's NOTE_KINDS).
-const NOTE_KINDS = new Set(["sargam", "run"]);

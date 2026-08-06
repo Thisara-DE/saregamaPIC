@@ -1,5 +1,8 @@
 // Mirrors backend/app/schemas.py — keep the two in sync by hand (the API is
-// small; add a generated client only if it grows past a handful of routes).
+// small; add a generated client only if it grows past a handful of routes). The
+// status unions below are typed as Literal on the backend and guarded against
+// drift by backend/tests/test_schema_drift.py, which fails CI if a backend
+// status set is missing here.
 
 export interface Song {
   id: string;

@@ -40,10 +40,10 @@ import {
 } from "../photoZoom";
 import { readPref, writePref } from "../prefs";
 import { insertToken, toggleMark, type Mark } from "../stfEdit";
+import { NOTE_KINDS } from "../stfGrammar";
 import type { Stf, StfLine, Transcription, TranscriptionStatus } from "../api/types";
 
 const KINDS = ["sargam", "run", "section", "lyric", "roadmap", "annotation"] as const;
-const NOTE_KINDS = new Set(["sargam", "run"]);
 
 // Tap-to-toggle marks so the reviewer never has to remember the ASCII suffixes.
 const MARK_BUTTONS: { label: string; title: string; mark: Mark }[] = [
@@ -72,6 +72,10 @@ const PHOTO_KEY = "saregamapic.editorPhotoOpen";
 // slightly shifted second tap still counts.
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_SLOP = 24;
+
+// How long the "Line deleted — Undo" offer stays up. Delete is a one-tap,
+// unconfirmed action (#12); a brief single-level undo is the safety net.
+const UNDO_MS = 6000;
 
 /**
  * Correction editor: original photo ↔ editable STF, side by side. "Recognize"
@@ -482,12 +486,57 @@ export function EditorPage() {
     pendingFocusLine.current = i + 1;
   }
 
+  // A one-tap delete with no confirm, so it keeps a single-level undo (#12): the
+  // removed line and where it sat, cleared when it is restored, when it times out,
+  // or when the page changes.
+  const [pendingUndo, setPendingUndo] = useState<{ line: StfLine; index: number } | null>(null);
+  const undoTimer = useRef<number | null>(null);
+
+  function clearUndo() {
+    if (undoTimer.current !== null) {
+      window.clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
+    setPendingUndo(null);
+  }
+
   function deleteLine(i: number) {
+    const removed = stf.lines[i];
     setStf((s) => ({
       ...s,
       lines: s.lines.filter((_, j) => j !== i).map((l, j) => ({ ...l, n: j + 1 })),
     }));
+    if (!removed) return;
+    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+    setPendingUndo({ line: removed, index: i });
+    undoTimer.current = window.setTimeout(() => {
+      undoTimer.current = null;
+      setPendingUndo(null);
+    }, UNDO_MS);
   }
+
+  function undoDelete() {
+    if (!pendingUndo) return;
+    const { line, index } = pendingUndo;
+    setStf((s) => {
+      const lines = [...s.lines];
+      const at = Math.min(index, lines.length);
+      lines.splice(at, 0, line);
+      return { ...s, lines: lines.map((l, j) => ({ ...l, n: j + 1 })) };
+    });
+    pendingFocusLine.current = Math.min(index, stf.lines.length);
+    clearUndo();
+  }
+
+  // Drop a stale undo when the page changes, and clear the timer on unmount.
+  useEffect(() => {
+    setPendingUndo(null);
+  }, [scanId]);
+  useEffect(() => {
+    return () => {
+      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+    };
+  }, []);
 
   // Apply a mark-bar edit to line `i` at its live caret, then put the caret
   // back where the transform asks (the controlled input re-renders otherwise).
@@ -758,6 +807,15 @@ export function EditorPage() {
           <button className="add-line" onClick={addLine}>
             + Add line
           </button>
+
+          {pendingUndo && (
+            <div className="undo-toast" role="status">
+              <span>Line {pendingUndo.line.n} deleted.</span>
+              <button className="button-link" onClick={undoDelete}>
+                Undo
+              </button>
+            </div>
+          )}
 
           <div className="editor-actions">
             <button disabled={busy !== null} onClick={() => void handleSave("draft")}>

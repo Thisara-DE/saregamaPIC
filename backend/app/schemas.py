@@ -6,6 +6,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from .stf import STF_LINE_KINDS
 
+# Status enums, typed as Literal rather than bare `str` (finding #7): a stray
+# value from a query is then caught at serialization instead of silently reaching
+# the client, and the allowed set becomes a real OpenAPI enum. These are
+# hand-mirrored in frontend/src/api/types.ts; tests/test_schema_drift.py fails if
+# the two ever disagree.
+PageStatus = Literal["new", "draft", "reviewed"]  # gallery/song + per-page pill
+TranscriptionStatus = Literal["draft", "reviewed"]  # a transcription is one or the other
+
 
 class SongCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
@@ -39,7 +47,7 @@ class Scan(BaseModel):
     uploaded_at: str
     # This page's transcription status: "new" (not recognized), "draft", or
     # "reviewed". A freshly uploaded scan has no transcription yet, so "new".
-    status: str = "new"
+    status: PageStatus = "new"
 
 
 class Song(BaseModel):
@@ -57,7 +65,7 @@ class Song(BaseModel):
     digital_page_no: int | None = None
     # Gallery progress pill: "new" (nothing transcribed), "draft" (at least one
     # page is a draft), or "reviewed" (every page reviewed — shown as no pill).
-    status: str = "new"
+    status: PageStatus = "new"
 
 
 class SongDetail(Song):
@@ -113,7 +121,7 @@ class Stf(BaseModel):
 class Transcription(BaseModel):
     id: str
     scan_id: str
-    status: str  # draft | reviewed
+    status: TranscriptionStatus
     stf: Stf
     warnings: list[str] = []
     # Recognition cost metrics (None for a manually-typed transcription).
@@ -169,7 +177,7 @@ class StfIn(BaseModel):
 
 class TranscriptionSave(BaseModel):
     stf: StfIn
-    status: str = Field(default="draft", pattern="^(draft|reviewed)$")
+    status: TranscriptionStatus = "draft"
 
 
 # --- Recognition baseline (Phase 3.5) ---

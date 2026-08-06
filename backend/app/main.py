@@ -28,6 +28,7 @@ from .auth import (
 )
 from .config import APP_VERSION, Settings
 from .recognition import Recognizer, make_recognizer
+from .retention import prune_expired
 from .routers import learning, scans, songs, transcriptions
 from .schemas import Health
 from .security import configure_logging
@@ -82,6 +83,12 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
         conn = db.connect(settings.db_path)
         try:
             prepare_initial_owner(conn, settings)
+            # Opportunistic retention prune (finding #5). Non-fatal: a prune that
+            # can't run must never stop the app from serving.
+            try:
+                prune_expired(conn, settings)
+            except sqlite3.Error:
+                logger.warning("startup retention prune failed", exc_info=True)
         finally:
             conn.close()
         yield

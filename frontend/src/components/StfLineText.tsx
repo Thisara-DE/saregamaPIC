@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { noteTokenRegex } from "../stfGrammar";
 
 /**
  * Render a sargam/run line the way it looks on paper: flat = underline,
@@ -10,8 +11,6 @@ import { Fragment, type ReactNode } from "react";
  * Storage is ASCII (R_ flat, M^ sharp, S' upper dot, S, lower dot); this only
  * changes how it *displays*, never the stored text.
  */
-
-const NOTE_RE = /[SRGMPDN][_^',]*/g;
 
 interface NoteToken {
   letter: string;
@@ -53,8 +52,8 @@ function renderInline(text: string, key: { n: number }): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
-  NOTE_RE.lastIndex = 0;
-  while ((m = NOTE_RE.exec(text)) !== null) {
+  const noteRe = noteTokenRegex();
+  while ((m = noteRe.exec(text)) !== null) {
     if (m.index > last) {
       nodes.push(<Fragment key={key.n++}>{text.slice(last, m.index)}</Fragment>);
     }
