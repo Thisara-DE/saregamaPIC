@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
+from app import db
 from app.config import Settings
 from app.main import create_app
 from app.storage import data_dir_is_ephemeral, preview_path, thumbnail_path
@@ -73,6 +74,36 @@ def test_compiled_frontend_and_spa_fallback(tmp_path):
         assert "javascript" in c.get("/app.js").headers["content-type"]
         assert c.get("/missing.js").status_code == 404
         assert c.get("/api/not-a-route").status_code == 404
+
+
+def test_static_assets_skip_db_connection(tmp_path, monkeypatch):
+    """Finding 4: the SPA shell and its assets must not open a SQLite connection
+    (nor, with auth on, run a session SELECT); only /api/* pays for the DB."""
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text("<h1>SaReGaMaPic</h1>", encoding="utf-8")
+    (web_dir / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    settings = Settings(data_dir=tmp_path / "data", web_dir=web_dir)
+
+    with TestClient(create_app(settings)) as c:
+        # Count only request-time connections — startup migration already ran.
+        connects = 0
+        real_connect = db.connect
+
+        def counting_connect(path):
+            nonlocal connects
+            connects += 1
+            return real_connect(path)
+
+        monkeypatch.setattr(db, "connect", counting_connect)
+
+        assert c.get("/").status_code == 200
+        assert c.get("/app.js").status_code == 200
+        assert c.get("/songs/abc/pages/1").status_code == 200  # SPA fallback
+        assert connects == 0
+
+        assert c.get("/api/health").status_code == 200
+        assert connects == 1  # one /api request, exactly one connection
 
 
 def test_song_crud_and_scan_roundtrip(client, settings):
