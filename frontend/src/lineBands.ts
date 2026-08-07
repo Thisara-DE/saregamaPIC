@@ -6,11 +6,18 @@
  * also top to bottom, but the two counts need not match: recognition can split
  * or merge a row, a line can be blank, an annotation can sit off to the side.
  *
- * So rather than assume a 1:1 index, we place the line proportionally among the
- * detected rows and snap to the nearest real one. When the counts DO match this
- * is exactly the 1:1 mapping (line i → band i); when they differ, every line
- * still lands on an actual ink row instead of an even slice of blank paper. Both
- * sequences are monotonic top-to-bottom, so proportional placement is sound.
+ * Crucially, not every detected ink row is an STF line. The written song title
+ * and the Concert/Alto/beat header both sit ABOVE the first sargam row, and the
+ * recognition contract stores them separately (`song.title`, `stf.header`) —
+ * they never appear in `stf.lines`. So the surplus bands are systematically
+ * top-heavy, which is the one distribution a bare proportional mapping handles
+ * worst (finding F6). The caller passes `topExtra` — how many such non-line rows
+ * it knows are present — so those top bands are skipped before mapping.
+ *
+ * After the skip: when the counts line up it is an exact 1:1 (line i → band
+ * i + extra); when they still differ, the line is placed proportionally across
+ * the REMAINING rows and snapped to a real one, so a line always lands on an
+ * actual ink row rather than an even slice of blank paper.
  *
  * Pure and separate from React, like photoZoom/stfEdit: the maths is the part
  * that goes subtly wrong and is worth testing on its own.
@@ -25,12 +32,32 @@ export interface Band {
  * The photo band for STF line `index` (of `lineCount` lines), or `null` when
  * there are no detected bands to scroll to (a blank page, or detection failed —
  * the editor then simply doesn't auto-scroll).
+ *
+ * `topExtra` counts detected rows that precede the first STF line (a written
+ * title and/or a header row). It is only a hint: we never skip more bands than
+ * the actual surplus, so an over-estimate — e.g. a title the user typed that was
+ * never on the paper — cannot strand the lines; it degrades to the smaller,
+ * correct skip. Defaults to 0, which is the original proportional behaviour.
  */
-export function bandForLine(bands: Band[], index: number, lineCount: number): Band | null {
+export function bandForLine(
+  bands: Band[],
+  index: number,
+  lineCount: number,
+  topExtra = 0,
+): Band | null {
   if (bands.length === 0) return null;
-  if (bands.length === 1 || lineCount <= 1) return bands[0]!;
-  const clampedIndex = Math.min(Math.max(index, 0), lineCount - 1);
-  // Position the line proportionally, then snap to the nearest detected row.
-  const j = Math.round((clampedIndex / (lineCount - 1)) * (bands.length - 1));
-  return bands[Math.min(Math.max(j, 0), bands.length - 1)]!;
+  const clampedIndex = Math.min(Math.max(index, 0), Math.max(lineCount - 1, 0));
+
+  // Skip the known non-line rows at the top — but never more than the real
+  // surplus, so line 0 maps to the first WRITING row, not the title above it.
+  const surplus = Math.max(bands.length - lineCount, 0);
+  const extra = Math.min(Math.max(topExtra, 0), surplus);
+  const usable = bands.length - extra;
+
+  if (usable <= 1 || lineCount <= 1) return bands[extra]!;
+  if (usable === lineCount) return bands[extra + clampedIndex]!; // exact 1:1 after the skip
+  // Counts still differ (a split/merged row, a blank line, a stray band): place
+  // the line proportionally across the remaining rows and snap to a real one.
+  const j = extra + Math.round((clampedIndex / (lineCount - 1)) * (usable - 1));
+  return bands[Math.min(Math.max(j, extra), bands.length - 1)]!;
 }
