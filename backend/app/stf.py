@@ -36,7 +36,11 @@ _NOTE_BASE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 # It is spliced into larger alternations (e.g. `learning.TOKEN_RE`), so keep it a
 # single self-contained alternative with no top-level `|`, or its consumers must
 # wrap it in a group.
-NOTE_TOKEN_PATTERN = r"[SRGMPDN][_^',]*"
+# bandit B105 flags this as a "hardcoded password" only because the name contains
+# "TOKEN" — it is a note-grammar regex (a character class), never a credential.
+# Suppress that one test rather than renaming the anchor that `learning.TOKEN_RE`
+# and the frontend `noteTokenRegex` deliberately mirror, or disabling bandit.
+NOTE_TOKEN_PATTERN = r"[SRGMPDN][_^',]*"  # nosec B105
 _NOTE_RE = re.compile(NOTE_TOKEN_PATTERN)
 # Any OTHER capital letter in a note line is not sargam — almost always a
 # recognition misread (e.g. B for R). Flag it loudly.
