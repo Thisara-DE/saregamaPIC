@@ -47,14 +47,16 @@ Two consequences worth knowing before touching the thresholds:
   to half the page tall. Desk contamination of the ink level is not a problem the
   ink threshold has to solve, because the paper span already excludes the desk
   from the measurement.
-- A row that is *entirely* dark has no paper span of its own. That is ambiguous —
-  it is either a very heavily written row or a row of pure desk — and the two are
-  told apart by position, not by pixel value: an all-dark run bounded by paper on
-  both sides is written and inherits its neighbours' span, while one that runs to
-  the image edge is surround and is dropped. A written row flush against the top
-  or bottom edge with no margin at all is therefore missed; real captures have a
+- A row that is *entirely* dark has no paper span of its own, and is resolved by
+  position, not by pixel value: an all-dark run bounded by paper on both sides is
+  taken as writing and inherits its neighbours' span, while one that runs to the
+  image edge is surround and is dropped. A written row flush against the top or
+  bottom edge with no margin at all is therefore missed; real captures have a
   margin, and missing a band degrades to not scrolling rather than scrolling
-  somewhere wrong.
+  somewhere wrong. The enclosed case is treated as writing because that is the
+  useful default, but it is not only writing — an on-sheet shadow, fold, or resting
+  object is enclosed too and is mis-classified as a written row, bounded (not
+  prevented) by the max-height filter. See ``_fill_enclosed_gaps``.
 
 The thresholds below are principled but still validated against synthetic images
 rather than the real hand-written corpus (the editor is login-gated). The
@@ -86,14 +88,26 @@ _MIN_CONTRAST = 40
 #
 # 0.014, not the 0.012 this was before the paper span existed — the constant had
 # to be re-calibrated because what it divides by changed. The old code averaged a
-# whole row into ONE byte, so the comparison quantized to 1/255 steps and 0.012
-# actually behaved as 4/255 ≈ 0.0157. Summing over the span keeps ~60× that
-# precision, which made the nominal 0.012 materially looser than what shipped, and
-# on the real sheets that let faint marks in the gaps bridge adjacent rows into one
-# band. Calibrated against all 10 `samples/` scans, the only real corpus there is:
-# at 0.014 every band the reviewed baseline found is still found and still separate
-# (0 merged, 0 lost), with one additional row correctly split apart on 002. This is
-# the docstring's owed real-corpus tuning pass, done for this one constant.
+# whole row into ONE byte and tested `value >= 0.012 * 255` (= `value >= 3.06`);
+# `value` is an integer, so that is `value >= 4`. But `value` is not `floor(255·f)`
+# — it is Pillow's resampled average, whose 8-bit accumulator is seeded with half
+# an LSB and so rounds half-up, making `value >= 4` mean `f >= 3.5/255 ≈ 0.0137`.
+# So the threshold that ACTUALLY SHIPPED was ≈0.0137, and 0.014 is a ~2% tightening
+# of it, holding shipped behaviour roughly constant while the denominator changed
+# underneath it — NOT the correction of a 17%-loose 0.0157 an earlier version of
+# this note claimed (see finding F18; that arithmetic was wrong). Pulling the other
+# way by a similar amount: the span's one-bucket inset at each end (see below) drops
+# ~2 of ~64 buckets, so the same ink is ~3% larger as a fraction; the two nearly
+# cancel. A re-tune must reason from ≈0.0137 as the known-good floor, not 0.0157.
+#
+# Calibrated against all 10 `samples/` scans, the only real corpus there is. That
+# comparison is now an EXECUTABLE golden file — tests/line_bands_baseline.json, the
+# per-sheet band count through the production WebP-q80 preview path — asserted by
+# test_real_sheets_match_the_committed_baseline, not the prose "0 merged, 0 lost"
+# that used to live here (which was measured on a JPEG thumbnail the running system
+# never sees; finding F17). Re-run `uv run python -m tests.test_line_detection
+# --update-baseline` (from backend/) after a deliberate threshold change, eyeball
+# the diff, and only then commit the new golden file.
 _ROW_INK_FRACTION = 0.014
 # Ink runs closer than this (as a fraction of image height) are merged into one
 # band: it stitches a note row back together with the octave dots and flat dashes
@@ -222,16 +236,27 @@ def _fill_enclosed_gaps(
 ) -> list[tuple[int, int] | None]:
     """Give all-dark rows the paper span of their neighbours, but only when enclosed.
 
-    A row with no paper bucket is either a written row so heavy it leaves no paper
-    showing, or a row of pure surround. Pixel values can't separate those — a desk
-    and a pencil stroke are both just "not paper" — but position can. A dark run
-    with paper above AND below it is inside the sheet, so it is writing and takes
-    the wider of the two enclosing spans as its own. A run reaching the top or
-    bottom edge has surround on one side and is left ``None``, which drops it.
+    A row with no paper bucket has lost the measurement the whole module rests on,
+    and it is resolved by position, not by pixel value — a desk and a pencil stroke
+    are both just "not paper". A dark run reaching the top or bottom edge has
+    surround on one side, so it is left ``None`` and dropped. A dark run with paper
+    above AND below it is enclosed, so it inherits the wider of the two enclosing
+    spans and stays a candidate.
 
-    ``max_run`` bounds the inheritance: a dark run taller than a plausible written
-    row is not one, and letting it inherit would only produce a band that the
-    max-height filter then discards.
+    Enclosed is treated *as* writing because that is the useful default, but the
+    class is not exhaustively "heavy writing". A third member is any dark band lying
+    ON the sheet — a cast shadow from the phone or photographer, a fold or curl, an
+    object resting on the paper — which is also enclosed by paper and so also
+    inherits a span, and if it is darker than ``ink_level`` becomes a band. This is
+    a known mis-classification, not a regression: the old whole-frame threshold
+    banded such a shadow too. It is bounded, not prevented: ``max_run`` caps the
+    inheritance, and the max-height filter drops what survives. Note those two
+    limits are the SAME number (``max_run`` is ``round(height * _MAX_HEIGHT_FRACTION)``),
+    so a run of exactly ``height/2`` passes both rather than being caught by the
+    second — an on-sheet shadow spanning close to half the page is the residual
+    case, and separating it would need a per-row ink *ceiling* over the paper span
+    (the ``_ROW_INK_MAX_FRACTION`` shape F13/F14 defeated when it was measured over
+    the frame), with the same fail-first fixture discipline the desk cases got.
     """
     filled = list(spans)
     start: int | None = None

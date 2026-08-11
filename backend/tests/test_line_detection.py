@@ -14,11 +14,13 @@ measured across the real ``samples/`` scans) rather than a solid bar, because a
 solid bar cannot distinguish an ink fraction measured over the paper span from
 one measured over the whole frame — which is the entire point of F9."""
 
+import io
+import json
 import math
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from app.line_detection import (
     _fill_enclosed_gaps,
@@ -27,12 +29,40 @@ from app.line_detection import (
     _runs,
     detect_line_bands,
 )
+from app.storage import PREVIEW_MAX_DIM
 
 WIDTH, HEIGHT = 200, 1000
 
 # The user's real hand-written sheets. Gitignored (they are the Phase 2 eval set,
-# not test data), so anything using them must skip when they are absent.
-_SAMPLES = sorted((Path(__file__).resolve().parents[2] / "samples").glob("*.jpg"))
+# not test data), so anything using them must skip when they are absent. Glob every
+# extension the corpus might hold, not just *.jpg — a .jpeg/.png/.webp sample used to
+# be silently excluded while the skip message still claimed the corpus was absent
+# (F16).
+_SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
+_SAMPLES = sorted(
+    p for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp") for p in _SAMPLES_DIR.glob(ext)
+)
+# Committed golden file: per-sheet band count through the production preview path.
+_BASELINE_PATH = Path(__file__).resolve().parent / "line_bands_baseline.json"
+
+
+def _bands_through_preview(path: Path) -> list[tuple[float, float]]:
+    """Detect on the SAME artifact production feeds the detector: the WebP-q80 editor
+    preview, not the source JPEG. Mirrors ``storage._ensure_derived`` exactly
+    (exif_transpose -> thumbnail(PREVIEW_MAX_DIM) -> convert RGB -> WEBP q80), so the
+    corpus check sees the lossy re-encode the running system does (F17). This is not
+    a rounding-error difference: WebP q80 shifts the grey histogram every quantity
+    the detector reads is taken from, and on this corpus it changes the band count on
+    7 of 10 sheets versus the raw thumbnail the old test used.
+    """
+    with Image.open(path) as im:
+        im = ImageOps.exif_transpose(im)
+        im.thumbnail((PREVIEW_MAX_DIM, PREVIEW_MAX_DIM))
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "WEBP", quality=80)
+    buf.seek(0)
+    with Image.open(buf) as preview:
+        return detect_line_bands(preview.copy())
 
 
 def _sheet(bars: list[tuple[int, int]]) -> Image.Image:
@@ -99,15 +129,31 @@ def _bottom_desk_sheet(
 
 
 def _side_desk_sheet(
-    rows: list[tuple[int, int]], *, coverage: float = 0.45, surround: int = 90, paper: int = 230
+    rows: list[tuple[int, int]],
+    *,
+    coverage: float = 0.45,
+    surround: int = 90,
+    paper: int = 230,
+    penumbra: int = 0,
 ) -> Image.Image:
     """F13's framing: desk down BOTH sides covering `coverage` of every row, paper
     filling the middle. Every row has the same desk contribution, so a whole-frame
-    ink fraction ranks blank rows and written rows within a hair of each other."""
+    ink fraction ranks blank rows and written rows within a hair of each other.
+
+    `penumbra` softens the paper/desk edge: instead of a one-pixel step, a linear
+    paper->surround ramp `penumbra` px wide sits just outside each inner paper edge,
+    the way a real out-of-focus or shadowed capture blurs the boundary. A step edge
+    is confined to the single bucket the detector's inset removes; a soft one spans
+    more, which is the case F19 asked whether the one-bucket inset survives."""
     im = Image.new("L", (WIDTH, HEIGHT), surround)
     draw = ImageDraw.Draw(im)
     margin = round(WIDTH * coverage / 2)
     draw.rectangle([margin, 0, WIDTH - margin - 1, HEIGHT - 1], fill=paper)
+    for k in range(penumbra):
+        val = round(surround + (paper - surround) * (k + 1) / (penumbra + 1))
+        draw.line([(margin - penumbra + k, 0), (margin - penumbra + k, HEIGHT - 1)], fill=val)
+        right = WIDTH - margin - 1 + penumbra - k
+        draw.line([(right, 0), (right, HEIGHT - 1)], fill=val)
     for top, bottom in rows:
         _write_row(draw, top, bottom, margin + 4, WIDTH - margin - 5)
     return im
@@ -225,6 +271,26 @@ def test_side_desk_does_not_invert_the_classifier():
         assert y0 <= (top + bottom) / 2 / HEIGHT <= y1, (rows, bands)
 
 
+def test_side_desk_soft_edge_still_finds_the_rows():
+    # F19 asked whether the one-bucket edge inset survives a SOFT paper/desk edge.
+    # Every other desk fixture draws a hard step edge, which the single-bucket inset
+    # removes exactly; the reviewer's arithmetic predicted the second (inner)
+    # penumbra bucket would survive the inset and push blank rows over
+    # _ROW_INK_FRACTION, returning either a spurious band or [] on a real soft edge.
+    # It does not: with a 30px ramp on this 200px fixture the rows are found cleanly.
+    # Verified out-of-band that the same holds at a realistic 1228px preview width up
+    # to a ~3-bucket ramp, so this pass is not an artifact of the narrow fixture. The
+    # concern is therefore ANSWERED by evidence, not by a code change — this test is
+    # the regression guard that a future inset change reintroducing it must trip.
+    # (A real desk photograph through the WebP path is still owed and would settle it
+    # beyond synthetics; see the session log.)
+    rows = [(200, 240), (500, 540), (800, 840)]
+    bands = detect_line_bands(_side_desk_sheet(rows, penumbra=30))
+    assert len(bands) == len(rows), bands
+    for (top, bottom), (y0, y1) in zip(rows, bands, strict=True):
+        assert y0 <= (top + bottom) / 2 / HEIGHT <= y1, (rows, bands)
+
+
 def test_tilted_desk_edge_adds_no_band():
     # F14: the same bottom desk, tilted 3° as a handheld capture always is. The
     # boundary sweeps ~63 rows whose desk coverage runs continuously from 0 to 1, so
@@ -253,26 +319,40 @@ def test_over_tall_run_is_dropped():
 
 
 @pytest.mark.skipif(not _SAMPLES, reason="samples/ is gitignored; present on dev machines only")
-def test_real_sheets_hold_the_band_invariants():
-    # The real corpus is the only evidence _ROW_INK_FRACTION is calibrated right —
-    # and it is gitignored, so this cannot run in CI and cannot be the whole story.
-    # It asserts the invariants that survive someone adding a sheet, rather than
-    # per-file band counts, which would break on the first new scan. The count
-    # comparison against the reviewed baseline (0 merged, 0 lost across all 10) is
-    # recorded beside the constant in line_detection.py; re-run it by hand when
-    # touching a threshold.
+def test_real_sheets_match_the_committed_baseline():
+    # The real corpus is the only evidence _ROW_INK_FRACTION is calibrated right, and
+    # it is gitignored, so this cannot run in CI. What it CAN do on a dev machine is
+    # fail loudly when a threshold change merges or loses a band — which the previous
+    # version could NOT, because it asserted only invariants the algorithm's shape
+    # already guarantees (in-range, sorted, non-overlapping, <=0.5 is the max-height
+    # filter's own predicate), so the exact Otsu-as-ink-level regression it was
+    # written for would have kept it green (F16). It now pins the per-sheet band
+    # COUNT to a committed golden file, measured through the production WebP preview
+    # path rather than a raw JPEG thumbnail the running system never sees (F17).
+    baseline: dict[str, int] = json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
+    present = {p.name for p in _SAMPLES}
+    # A partially-synced Dropbox folder must fail loudly, not silently check fewer
+    # sheets and read as a pass.
+    missing = sorted(set(baseline) - present)
+    assert not missing, f"baseline sheets absent from samples/ (partial sync?): {missing}"
     for path in _SAMPLES:
-        with Image.open(path) as im:
-            im.thumbnail((1600, 1600))
-            bands = detect_line_bands(im.copy())
+        bands = _bands_through_preview(path)
         assert bands, f"{path.name}: a written sheet must yield at least one band"
         assert all(0.0 <= y0 < y1 <= 1.0 for y0, y1 in bands), (path.name, bands)
-        assert all(y1 - y0 <= 0.5 for y0, y1 in bands), (path.name, bands)
         assert bands == sorted(bands), (path.name, bands)
         assert all(a[1] <= b[0] for a, b in zip(bands, bands[1:], strict=False)), (
             path.name,
             bands,
         )
+        if path.name in baseline:
+            assert len(bands) == baseline[path.name], (
+                f"{path.name}: {len(bands)} bands now, golden file has "
+                f"{baseline[path.name]} — a threshold change merged or lost a row. "
+                "If intended, regenerate with `python -m tests.test_line_detection "
+                "--update-baseline` and eyeball the diff before committing."
+            )
+        # else: a newly added sheet, shape-checked above; pin its count via
+        # --update-baseline when ready. Adding a sheet stays cheap.
 
 
 def test_runs_and_merge_gaps_helpers():
@@ -317,3 +397,27 @@ def test_fill_enclosed_gaps_separates_heavy_writing_from_surround():
     # can't narrow the denominator
     narrow, wide = (10, 20), (2, 60)
     assert _fill_enclosed_gaps([narrow, None, wide], max_run=10) == [narrow, wide, wide]
+
+
+def _update_baseline() -> None:
+    """Regenerate the committed golden file from the local samples/ corpus, through
+    the same production preview path the test asserts against. Deliberate manual
+    step — run only after an INTENDED threshold change, then eyeball the git diff.
+
+        cd backend && uv run python -m tests.test_line_detection --update-baseline
+    """
+    counts = {p.name: len(_bands_through_preview(p)) for p in _SAMPLES}
+    _BASELINE_PATH.write_text(json.dumps(counts, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {_BASELINE_PATH} with {len(counts)} entries:")
+    print(json.dumps(counts, indent=2))
+
+
+if __name__ == "__main__":
+    import sys
+
+    if "--update-baseline" in sys.argv:
+        if not _SAMPLES:
+            raise SystemExit(f"no samples found in {_SAMPLES_DIR}")
+        _update_baseline()
+    else:
+        raise SystemExit(__doc__ and "run with --update-baseline to regenerate the golden file")
