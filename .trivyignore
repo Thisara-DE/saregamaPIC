@@ -1,0 +1,27 @@
+# Trivy accepted-risk allowlist for the container gate (.github/workflows/ci.yml
+# "container" job). Every entry MUST stay justified as unreachable-at-runtime, or
+# be removed and fixed for real. The gate still fails on any HIGH/CRITICAL not
+# listed here (ignore-unfixed:true, so only fixable vulns are ever reported).
+#
+# Both current entries are in the BASE IMAGE's system Python packaging tooling
+# (/usr/local/lib/python3.13/site-packages), NOT the application virtualenv the
+# server runs from (/app/backend/.venv, built by `uv sync --locked --no-dev`).
+# Neither package is an application dependency: both are absent from
+# backend/uv.lock and from `uv tree`, so they cannot be bumped via the lockfile.
+#
+# CVE-2025-47273 -- setuptools < 78.1.1: path traversal in PackageIndex.
+#   Exploitable only when setuptools DOWNLOADS a package from an index
+#   (easy_install / PackageIndex). uv performs every install in this project; the
+#   runtime image never invokes setuptools at all, and the build uses uv, not
+#   easy_install. Unreachable at both build and run time. This is the slim base
+#   image's bundled setuptools 70.3.0.
+CVE-2025-47273
+#
+# GHSA-6v7p-g79w-8964 -- msgpack < 1.2.1: out-of-bounds read / crash when an
+#   Unpacker is REUSED after an unpack error. Exploitable only when code
+#   deserializes untrusted msgpack through a reused Unpacker. The application
+#   never imports msgpack; this is pip's VENDORED copy (pip 26.2.1 bundles
+#   msgpack 1.1.2), used only by pip's own on-disk cache at install time. It
+#   cannot be upgraded independently of pip, and the running server never
+#   executes pip. Unreachable at runtime.
+GHSA-6v7p-g79w-8964

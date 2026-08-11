@@ -124,4 +124,8 @@ jobs:
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          # Accepted-risk allowlist for base-image packaging-tool CVEs that are
+          # unreachable at runtime; each entry is justified in .trivyignore. Set
+          # explicitly rather than relying on the default working-dir lookup.
+          trivyignores: .trivyignore
           exit-code: "1"
