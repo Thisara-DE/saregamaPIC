@@ -5,6 +5,9 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { API_CACHE, AUTH_CACHE, IMAGE_CACHE } from "./src/swCache";
+
+const DAY = 24 * 60 * 60;
 
 // LAN HTTPS (needed for PWA install + camera on real devices):
 // generate certs with mkcert into frontend/certs/ (see README) and the dev
@@ -59,6 +62,60 @@ export default defineConfig({
       workbox: {
         // The SPA fallback must never swallow API calls.
         navigateFallbackDenylist: [/^\/api\//],
+        // Offline read (codebase-review finding #16). Without these, Workbox
+        // precaches the app shell only, so with no signal the gallery is empty
+        // AND RootGate's /api/auth/me fetch throws — the app never even boots.
+        // Each entry defaults to GET, so writes (POST/PUT/PATCH/DELETE:
+        // import, recognize, save, delete, rename) always pass through to the
+        // network and are never served stale. line-bands and health are left
+        // uncached (network-only) — neither is needed to read a sheet.
+        runtimeCaching: [
+          {
+            // The signed-in identity. NetworkFirst so an online load refreshes
+            // it, but offline it falls back to the cached user, which is what
+            // lets RootGate render the app instead of the error screen.
+            urlPattern: /\/api\/auth\/me$/,
+            handler: "NetworkFirst",
+            options: {
+              cacheName: AUTH_CACHE,
+              expiration: { maxEntries: 1, maxAgeSeconds: 30 * DAY },
+              // A flaky rehearsal-room connection should fall back to cache fast
+              // rather than hang the whole app boot behind a slow /me.
+              networkTimeoutSeconds: 3,
+            },
+          },
+          {
+            // Read data: the songs list (/api/songs), a song's detail
+            // (/api/songs/{id}) and per-page transcriptions
+            // (/api/scans/{id}/transcription). POST /api/songs/import matches
+            // this pattern too but is a POST, so the GET handler ignores it.
+            urlPattern: /\/api\/(songs(\/[^/]+)?|scans\/[^/]+\/transcription)$/,
+            handler: "NetworkFirst",
+            options: {
+              cacheName: API_CACHE,
+              expiration: { maxEntries: 128, maxAgeSeconds: 30 * DAY },
+              networkTimeoutSeconds: 3,
+            },
+          },
+          {
+            // Scan images — thumbnail, 1600px preview, full original. Immutable
+            // per scan id, so CacheFirst: whatever was viewed online is then
+            // available offline with no revalidation. statuses [0,200] keeps it
+            // robust to opaque responses; purgeOnQuotaError lets the browser
+            // reclaim these (the largest, most disposable cache) under pressure.
+            urlPattern: /\/api\/scans\/[^/]+\/(thumbnail|preview|image)$/,
+            handler: "CacheFirst",
+            options: {
+              cacheName: IMAGE_CACHE,
+              expiration: {
+                maxEntries: 256,
+                maxAgeSeconds: 60 * DAY,
+                purgeOnQuotaError: true,
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
     }),
   ],

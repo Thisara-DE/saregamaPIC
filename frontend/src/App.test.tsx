@@ -8,6 +8,7 @@ const authUser: AuthUser = {
   id: "user1",
   email: "thisara@example.com",
   display_name: "Thisara",
+  is_admin: false,
 };
 
 const song: Song = {

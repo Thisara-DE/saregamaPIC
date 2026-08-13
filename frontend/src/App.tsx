@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   createRoutesFromElements,
+  Link,
   Navigate,
   Outlet,
   Route,
@@ -10,6 +11,9 @@ import {
 } from "react-router-dom";
 import { ApiError, getCurrentUser, logout } from "./api/client";
 import type { AuthUser } from "./api/types";
+import { OfflineBanner } from "./components/OfflineBanner";
+import { clearOfflineCaches } from "./offline";
+import { AdminPage } from "./pages/AdminPage";
 import { EditorPage } from "./pages/EditorPage";
 import { PageViewer } from "./pages/PageViewer";
 import { SongPage } from "./pages/SongPage";
@@ -19,6 +23,10 @@ import { SongsPage } from "./pages/SongsPage";
 // the Shell (and anything else that needs them) via the router's outlet context.
 type AppContext = { user: AuthUser; onSignedOut: () => void };
 
+// Shell hands the user down to its own routed pages (e.g. AdminPage, which
+// guards on is_admin). Exported so those pages can type useOutletContext.
+export type ShellContext = { user: AuthUser };
+
 // Routing arrived with Phase 1's third view (the page viewer). The viewer
 // renders outside the Shell so the photo gets the whole screen.
 function Shell() {
@@ -26,11 +34,15 @@ function Shell() {
 
   async function signOut() {
     await logout();
+    // Drop the cached identity, songs and images so a signed-out (or a later
+    // different) user on this device can't read the previous session offline.
+    await clearOfflineCaches();
     onSignedOut();
   }
 
   return (
     <>
+      <OfflineBanner />
       <header className="app-header">
         <div>
           <h1>SaReGaMaPic</h1>
@@ -38,13 +50,20 @@ function Shell() {
         </div>
         <div className="account-menu">
           <span>{user.display_name || user.email}</span>
-          <button type="button" className="button-link" onClick={() => void signOut()}>
-            Sign out
-          </button>
+          <div className="account-links">
+            {user.is_admin && (
+              <Link className="button-link" to="/people">
+                Manage access
+              </Link>
+            )}
+            <button type="button" className="button-link" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
       <main>
-        <Outlet />
+        <Outlet context={{ user } satisfies ShellContext} />
       </main>
     </>
   );
@@ -158,6 +177,7 @@ export const routes = createRoutesFromElements(
     <Route element={<Shell />}>
       <Route path="/" element={<SongsPage />} />
       <Route path="/songs/:songId" element={<SongPage />} />
+      <Route path="/people" element={<AdminPage />} />
     </Route>
     <Route path="/songs/:songId/pages/:pageNo" element={<PageViewer />} />
     <Route path="/songs/:songId/pages/:pageNo/edit" element={<EditorPage />} />

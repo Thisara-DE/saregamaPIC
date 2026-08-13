@@ -2,6 +2,7 @@
 // server proxies them to FastAPI, so no CORS and no base-URL configuration.
 
 import type {
+  AdminUser,
   AuthUser,
   Health,
   LineBands,
@@ -52,6 +53,20 @@ export function getCurrentUser(): Promise<AuthUser> {
 
 export function logout(): Promise<void> {
   return request<void>("/api/auth/logout", { method: "POST" });
+}
+
+// --- Access management (admin only, finding #18) ---
+
+export function listUsers(): Promise<AdminUser[]> {
+  return request<AdminUser[]>("/api/auth/users");
+}
+
+export function inviteUser(email: string): Promise<AdminUser> {
+  return request<AdminUser>("/api/auth/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
 }
 
 export function listSongs(): Promise<Song[]> {

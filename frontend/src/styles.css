@@ -77,6 +77,12 @@ body {
   gap: 0.2rem;
 }
 
+.account-links {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
 .button-link {
   background: none;
   border: 0;
@@ -1188,6 +1194,13 @@ button:disabled {
   box-shadow: 0 12px 40px rgb(0 0 0 / 35%);
 }
 
+/* The card takes programmatic focus on open (tabIndex -1, finding #17) purely so
+   its Escape handler is heard; it is not an interactive control, so it shows no
+   focus ring. The buttons inside keep theirs. */
+.modal-card:focus {
+  outline: none;
+}
+
 .modal-card h2 {
   margin: 0 0 0.5rem;
   font-size: 1.15rem;
@@ -1269,4 +1282,29 @@ button:disabled {
   border-top: none;
   border-radius: 0 0 60% 60% / 0 0 100% 100%;
   opacity: 0.5;
+}
+
+/* Offline banner (finding #16). Floats over whatever surface is behind it — the
+   dark app header, the viewer's black photo stage, or day-theme paper — so its
+   colours are theme-INDEPENDENT and self-contained by design (the F2 lesson: a
+   control over a varying backdrop must not draw from a theme palette). Amber on
+   near-black clears 4.5:1 on all three. position: fixed → zero layout cost, and
+   it only mounts while offline. */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  max-width: 92vw;
+  margin-top: max(0.5rem, env(safe-area-inset-top, 0.5rem));
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  background: #f5b942;
+  color: #1a1200;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none; /* purely informational — never intercepts a tap */
 }
