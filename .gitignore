@@ -44,3 +44,6 @@ memories/
 *technical-design*.md
 *implementation-plan*.md
 *session-log*.md
+
+# Line-band inspection overlays (contain private sheet images)
+line_bands_overlays/
