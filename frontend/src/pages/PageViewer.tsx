@@ -8,6 +8,7 @@ import {
   scanImageUrl,
   scanPreviewUrl,
 } from "../api/client";
+import { OfflineBanner } from "../components/OfflineBanner";
 import { ProgressiveImage } from "../components/ProgressiveImage";
 import { StfLineText } from "../components/StfLineText";
 import { readPref, writePref } from "../prefs";
@@ -188,6 +189,7 @@ export function PageViewer() {
 
   return (
     <div className={`viewer theme-${theme}`}>
+      <OfflineBanner />
       <div className="viewer-bar">
         <button className="viewer-btn" onClick={() => navigate(`/songs/${songId}`)}>
           ✕

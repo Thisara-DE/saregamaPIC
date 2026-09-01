@@ -17,7 +17,7 @@ import re
 from typing import get_args
 
 from app.config import REPO_ROOT
-from app.schemas import PageStatus, TranscriptionStatus
+from app.schemas import PageStatus, TranscriptionStatus, UserStatus
 
 TYPES_TS = REPO_ROOT / "frontend" / "src" / "api" / "types.ts"
 
@@ -54,4 +54,14 @@ def test_status_enums_are_field_bound_in_frontend_types():
     ), (
         f"`export type TranscriptionStatus` must be "
         f"{sorted(get_args(TranscriptionStatus))} in {TYPES_TS.name} — it has drifted."
+    )
+
+    # UserStatus (the invite allowlist lifecycle, finding #18) is likewise the
+    # declared union of its type alias.
+    assert re.search(
+        r"type\s+UserStatus\s*=\s*" + _union_regex(UserStatus),
+        src,
+    ), (
+        f"`export type UserStatus` must be "
+        f"{sorted(get_args(UserStatus))} in {TYPES_TS.name} — it has drifted."
     )

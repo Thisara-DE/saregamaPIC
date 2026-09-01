@@ -1,7 +1,9 @@
 // Thin typed fetch wrapper. All paths are same-origin /api/* — the Vite dev
 // server proxies them to FastAPI, so no CORS and no base-URL configuration.
 
+import { invalidateCached } from "../offline";
 import type {
+  AdminUser,
   AuthUser,
   Health,
   LineBands,
@@ -54,6 +56,20 @@ export function logout(): Promise<void> {
   return request<void>("/api/auth/logout", { method: "POST" });
 }
 
+// --- Access management (admin only, finding #18) ---
+
+export function listUsers(): Promise<AdminUser[]> {
+  return request<AdminUser[]>("/api/auth/users");
+}
+
+export function inviteUser(email: string): Promise<AdminUser> {
+  return request<AdminUser>("/api/auth/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+}
+
 export function listSongs(): Promise<Song[]> {
   return request<Song[]>("/api/songs");
 }
@@ -62,47 +78,64 @@ export function getSong(id: string): Promise<SongDetail> {
   return request<SongDetail>(`/api/songs/${id}`);
 }
 
-export function createSong(title: string, notes = ""): Promise<Song> {
-  return request<Song>("/api/songs", {
+// Writes that change cached read data evict the affected GET entries after they
+// succeed (finding F21). With no network timeout on the read-data cache a stale
+// entry is only served when genuinely offline, but a mutation made just before
+// going offline would otherwise still read back the pre-change copy.
+
+export async function createSong(title: string, notes = ""): Promise<Song> {
+  const song = await request<Song>("/api/songs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, notes }),
   });
+  await invalidateCached(["/api/songs"]);
+  return song;
 }
 
-export function importSong(file: File, title = ""): Promise<SongImport> {
+export async function importSong(file: File, title = ""): Promise<SongImport> {
   const form = new FormData();
   form.append("file", file);
   form.append("title", title);
-  return request<SongImport>("/api/songs/import", {
+  const imported = await request<SongImport>("/api/songs/import", {
     method: "POST",
     body: form,
   });
+  await invalidateCached(["/api/songs"]);
+  return imported;
 }
 
-export function uploadScan(songId: string, file: File): Promise<Scan> {
+export async function uploadScan(songId: string, file: File): Promise<Scan> {
   const form = new FormData();
   form.append("file", file);
-  return request<Scan>(`/api/songs/${songId}/scans`, {
+  const scan = await request<Scan>(`/api/songs/${songId}/scans`, {
     method: "POST",
     body: form,
   });
+  await invalidateCached([`/api/songs/${songId}`, "/api/songs"]);
+  return scan;
 }
 
-export function renameSong(id: string, title: string): Promise<Song> {
-  return request<Song>(`/api/songs/${id}`, {
+export async function renameSong(id: string, title: string): Promise<Song> {
+  const song = await request<Song>(`/api/songs/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
+  await invalidateCached([`/api/songs/${id}`, "/api/songs"]);
+  return song;
 }
 
-export function deleteSong(id: string): Promise<void> {
-  return request<void>(`/api/songs/${id}`, { method: "DELETE" });
+export async function deleteSong(id: string): Promise<void> {
+  await request<void>(`/api/songs/${id}`, { method: "DELETE" });
+  await invalidateCached([`/api/songs/${id}`, "/api/songs"]);
 }
 
-export function deleteScan(id: string): Promise<void> {
-  return request<void>(`/api/scans/${id}`, { method: "DELETE" });
+export async function deleteScan(id: string): Promise<void> {
+  await request<void>(`/api/scans/${id}`, { method: "DELETE" });
+  // The scan's own transcription entry is now dead; the parent song detail also
+  // changes, but its id isn't known here, so evict the list it appears on.
+  await invalidateCached([`/api/scans/${id}/transcription`, "/api/songs"]);
 }
 
 // --- Transcriptions (STF) ---
@@ -177,16 +210,21 @@ export async function recognizeScan(
   }
 }
 
-export function saveTranscription(
+export async function saveTranscription(
   scanId: string,
   stf: Stf,
   status: TranscriptionStatus,
 ): Promise<Transcription> {
-  return request<Transcription>(`/api/scans/${scanId}/transcription`, {
+  const saved = await request<Transcription>(`/api/scans/${scanId}/transcription`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stf, status }),
   });
+  // Evict the now-superseded cached transcription (and the songs list, whose
+  // status pill this may flip) so an offline reopen can't read back the
+  // pre-save STF (finding F21). Best-effort, after the write succeeds.
+  await invalidateCached([`/api/scans/${scanId}/transcription`, "/api/songs"]);
+  return saved;
 }
 
 // Detected ink-row bands for the editor's per-line photo auto-scroll (#11).

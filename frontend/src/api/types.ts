@@ -63,6 +63,24 @@ export interface AuthUser {
   id: string;
   email: string;
   display_name: string;
+  // True only for the initial owner — the sole admin, who can invite others
+  // (finding #18). The frontend uses it to show/hide the access UI; the backend
+  // enforces it on the endpoints regardless.
+  is_admin: boolean;
+}
+
+// A user in the invite allowlist. Mirrors backend UserStatus (Literal) — the
+// alias form is required by tests/test_schema_drift.py, which asserts this exact
+// union. "invited" = added but never signed in; "active" = has signed in;
+// "disabled" = access revoked.
+export type UserStatus = "invited" | "active" | "disabled";
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  display_name: string;
+  status: UserStatus;
+  created_at: string;
 }
 
 // --- Transcriptions (STF) — mirror backend/app/schemas.py by hand ---
