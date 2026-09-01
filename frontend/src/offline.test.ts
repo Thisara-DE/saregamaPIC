@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearOfflineCaches, useOnlineStatus } from "./offline";
-import { RUNTIME_CACHES } from "./swCache";
+import { clearOfflineCaches, invalidateCached, useOnlineStatus } from "./offline";
+import { API_CACHE, RUNTIME_CACHES } from "./swCache";
 
 describe("useOnlineStatus", () => {
   afterEach(() => {
@@ -59,5 +59,37 @@ describe("clearOfflineCaches", () => {
   it("is a no-op (does not throw) where Cache Storage is absent", async () => {
     vi.stubGlobal("caches", undefined);
     await expect(clearOfflineCaches()).resolves.toBeUndefined();
+  });
+});
+
+describe("invalidateCached (finding F21)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("deletes exactly the given paths from the read-data cache", async () => {
+    const del = vi.fn().mockResolvedValue(true);
+    const open = vi.fn().mockResolvedValue({ delete: del } as unknown as Cache);
+    vi.stubGlobal("caches", { open } as unknown as CacheStorage);
+
+    await invalidateCached(["/api/scans/s1/transcription", "/api/songs"]);
+
+    // Only the read-data cache is touched — never the identity or image caches.
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith(API_CACHE);
+    expect(del).toHaveBeenCalledWith("/api/scans/s1/transcription");
+    expect(del).toHaveBeenCalledWith("/api/songs");
+    expect(del).toHaveBeenCalledTimes(2);
+  });
+
+  it("is a no-op (does not throw) where Cache Storage is absent", async () => {
+    vi.stubGlobal("caches", undefined);
+    await expect(invalidateCached(["/api/songs"])).resolves.toBeUndefined();
+  });
+
+  it("swallows a cache error so a failed eviction never fails the write it follows", async () => {
+    const open = vi.fn().mockRejectedValue(new Error("cache unavailable"));
+    vi.stubGlobal("caches", { open } as unknown as CacheStorage);
+    await expect(invalidateCached(["/api/songs"])).resolves.toBeUndefined();
   });
 });

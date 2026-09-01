@@ -33,11 +33,23 @@ function Shell() {
   const { user, onSignedOut } = useOutletContext<AppContext>();
 
   async function signOut() {
-    await logout();
-    // Drop the cached identity, songs and images so a signed-out (or a later
-    // different) user on this device can't read the previous session offline.
-    await clearOfflineCaches();
-    onSignedOut();
+    // The local sign-out must happen regardless of the server call: logout()
+    // rejects when we are offline (fetch throws) or when the session already
+    // lapsed (401), and if that skipped the two lines below the button would
+    // look dead AND the cached identity, songs and images would stay on the
+    // device — the exact leak clearOfflineCaches exists to prevent, on the one
+    // path (offline / shared tablet) findings #16 and #18 made reachable. So
+    // swallow the error here: this is the one place where dropping it is the
+    // safe direction, because clearing local state needs no network. The
+    // server-side session is still revoked whenever the request does land.
+    try {
+      await logout();
+    } catch {
+      // offline, or the session was already gone — sign out locally anyway.
+    } finally {
+      await clearOfflineCaches();
+      onSignedOut();
+    }
   }
 
   return (

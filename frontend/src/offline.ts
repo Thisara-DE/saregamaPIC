@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RUNTIME_CACHES } from "./swCache";
+import { API_CACHE, RUNTIME_CACHES } from "./swCache";
 
 /**
  * Live online/offline state, tracking `navigator.onLine` plus the window
@@ -45,4 +45,28 @@ export function useOnlineStatus(): boolean {
 export async function clearOfflineCaches(): Promise<void> {
   if (typeof caches === "undefined") return;
   await Promise.all(RUNTIME_CACHES.map((name) => caches.delete(name)));
+}
+
+/**
+ * Evict specific GET responses from the read-data cache after a write that
+ * changes them. The read-data routes are NetworkFirst with no network timeout,
+ * so a stale entry is only ever served when genuinely offline — but a save made
+ * just before going offline would otherwise still read back the pre-save copy
+ * from cache. Deleting the entry the write invalidated closes that window, so
+ * the offline fallback can never resurrect a superseded document (finding F21).
+ *
+ * `paths` are same-origin `/api/...` request paths (the cache is keyed by the
+ * full request URL, so we resolve each against the current origin). A no-op
+ * where Cache Storage is absent (jsdom), so callers can await it unconditionally
+ * and best-effort — a failed eviction must never fail the write it follows.
+ */
+export async function invalidateCached(paths: string[]): Promise<void> {
+  if (typeof caches === "undefined") return;
+  try {
+    const cache = await caches.open(API_CACHE);
+    await Promise.all(paths.map((p) => cache.delete(p)));
+  } catch {
+    // Best-effort: the entry expires on its own and NetworkFirst refreshes it
+    // the next time we are online, so a failed eviction is not worth surfacing.
+  }
 }

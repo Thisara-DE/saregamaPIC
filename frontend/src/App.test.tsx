@@ -3,6 +3,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RouteErrorPage, routes } from "./App";
 import type { AuthUser, Song, SongDetail } from "./api/types";
+import { RUNTIME_CACHES } from "./swCache";
 
 const authUser: AuthUser = {
   id: "user1",
@@ -519,6 +520,36 @@ describe("App", () => {
     expect(
       screen.queryByRole("link", { name: "Continue with Google" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("signs out locally even when the logout request fails (finding F22)", async () => {
+    // Offline, or an already-lapsed session: the POST /api/auth/logout rejects.
+    // The local sign-out must still happen — the button must not look dead and
+    // the runtime caches must be cleared — or a shared/handed-off device keeps
+    // the previous user's identity, songs and images readable offline.
+    const del = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("caches", { delete: del } as unknown as CacheStorage);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "/api/auth/me") return Promise.resolve(Response.json(authUser));
+        if (url === "/api/auth/logout" && init?.method === "POST") {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(Response.json(songs));
+      }),
+    );
+    renderAt("/");
+    await screen.findByText("Test Sinhala Song");
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    // onSignedOut ran despite the rejection → the login screen is shown.
+    await screen.findByRole("link", { name: "Continue with Google" });
+    // clearOfflineCaches ran too → every runtime cache was dropped.
+    expect(del).toHaveBeenCalledTimes(RUNTIME_CACHES.length);
+    vi.unstubAllGlobals();
   });
 
   it("wires the error boundary onto the root route", () => {

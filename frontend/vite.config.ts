@@ -89,21 +89,43 @@ export default defineConfig({
             // (/api/songs/{id}) and per-page transcriptions
             // (/api/scans/{id}/transcription). POST /api/songs/import matches
             // this pattern too but is a POST, so the GET handler ignores it.
+            //
+            // Deliberately NO networkTimeoutSeconds here (unlike /me above):
+            // a timeout falls back to cache whenever the network is merely
+            // *slow*, which on a weak signal is routine. The transcription GET
+            // has no post-write cache invalidation, so a slow-path fallback can
+            // serve a pre-save STF, and the editor's full-document PUT then
+            // writes that stale copy back — silently rolling back the faithful
+            // stored transcription (review finding F21). Without the timeout,
+            // NetworkFirst only falls back to cache when fetch genuinely
+            // rejects (truly offline), which is the case offline read targets;
+            // a slow connection always waits for fresh data. Writes still evict
+            // their own cache entry via invalidateCached (see api/client.ts).
             urlPattern: /\/api\/(songs(\/[^/]+)?|scans\/[^/]+\/transcription)$/,
             handler: "NetworkFirst",
             options: {
               cacheName: API_CACHE,
               expiration: { maxEntries: 128, maxAgeSeconds: 30 * DAY },
-              networkTimeoutSeconds: 3,
             },
           },
           {
-            // Scan images — thumbnail, 1600px preview, full original. Immutable
-            // per scan id, so CacheFirst: whatever was viewed online is then
-            // available offline with no revalidation. statuses [0,200] keeps it
-            // robust to opaque responses; purgeOnQuotaError lets the browser
-            // reclaim these (the largest, most disposable cache) under pressure.
-            urlPattern: /\/api\/scans\/[^/]+\/(thumbnail|preview|image)$/,
+            // Scan images — thumbnail and the 1600px preview ONLY, not the
+            // full-resolution /image (a 4000x3000 original is 1-2 orders of
+            // magnitude larger). maxEntries budgets by COUNT, not bytes, so
+            // including the originals meant 256 unbounded-size files: a reader
+            // paging through a song caches both preview and original per turn,
+            // so real sessions accumulated hundreds of MB, and the only byte
+            // control (purgeOnQuotaError) flushes the WHOLE cache after a put
+            // already failed — an all-or-nothing cliff, not a bounded LRU
+            // (review finding F23). The preview is what the viewer paints first
+            // and the editor's photo pane uses, and is legible for reading a
+            // sheet; offline, the original simply doesn't swap in (graceful
+            // degradation) instead of risking a quota flush of every image.
+            // Immutable per scan id, so CacheFirst: whatever was viewed online
+            // is then available offline with no revalidation. statuses [0,200]
+            // keeps it robust to opaque responses; purgeOnQuotaError still lets
+            // the browser reclaim these under genuine pressure.
+            urlPattern: /\/api\/scans\/[^/]+\/(thumbnail|preview)$/,
             handler: "CacheFirst",
             options: {
               cacheName: IMAGE_CACHE,
