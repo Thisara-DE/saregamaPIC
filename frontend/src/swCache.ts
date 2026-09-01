@@ -13,10 +13,14 @@ export const AUTH_CACHE = "sarega-auth";
 // transcriptions (the STF). Fresh when online, served from cache offline.
 export const API_CACHE = "sarega-api";
 
-// CacheFirst — scan images (thumbnail, 1600px preview, full original). These
-// are immutable artifacts keyed by scan id (originals never change per the
-// fidelity rule; derived copies are pure cache), so once viewed online they are
-// available offline without a revalidation round-trip.
+// CacheFirst — scan images: the thumbnail and the 1600px preview only. The
+// full-resolution original (/image) is deliberately NOT cached — under a
+// count-only entry budget the multi-MB originals blow the byte budget and risk
+// an all-or-nothing quota flush, so offline it degrades to "the preview is
+// shown, the original doesn't swap in" (finding F23). What is cached is
+// immutable per scan id (originals never change per the fidelity rule; derived
+// copies are pure cache), so once viewed online it is available offline without
+// a revalidation round-trip.
 export const IMAGE_CACHE = "sarega-images";
 
 // Every runtime cache this app owns — clearOfflineCaches() deletes exactly these
