@@ -8,6 +8,7 @@ import {
   scanThumbnailUrl,
 } from "../api/client";
 import type { Song } from "../api/types";
+import { deleteSongWarning } from "../songDelete";
 
 export function SongsPage() {
   const navigate = useNavigate();
@@ -91,14 +92,7 @@ export function SongsPage() {
 
   async function handleDelete(song: Song) {
     setMenuFor(null);
-    const displayTitle = song.title || "Untitled song";
-    const pages = song.scan_count;
-    const warning =
-      pages === 0
-        ? `Delete "${displayTitle}"?`
-        : `Delete "${displayTitle}" and its ${pages} ${pages === 1 ? "page" : "pages"}? ` +
-          "The original photos are removed too.";
-    if (!window.confirm(warning)) return;
+    if (!window.confirm(deleteSongWarning(song.title, song.scan_count))) return;
     try {
       await deleteSong(song.id);
       setSongs((current) => (current ?? []).filter((s) => s.id !== song.id));

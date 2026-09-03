@@ -11,25 +11,14 @@ from ..line_detection import detect_line_bands
 from ..schemas import LineBand, LineBands
 from ..security import enforce_limit, security_event
 from ..storage import delete_scan_files, ensure_preview, ensure_thumbnail
+from ._common import scan_row
 
 router = APIRouter()
 
 
-def _scan_row(request: Request, scan_id: str) -> sqlite3.Row:
-    row = request.state.db.execute(
-        "SELECT sc.id, sc.song_id, sc.image_path, sc.content_type"
-        " FROM scans sc JOIN songs so ON so.id = sc.song_id"
-        " WHERE sc.id = ? AND so.owner_id = ?",
-        (scan_id, current_user_id(request)),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
-    return row
-
-
 @router.get("/scans/{scan_id}/image")
 def get_scan_image(scan_id: str, request: Request) -> FileResponse:
-    row = _scan_row(request, scan_id)
+    row = scan_row(request, scan_id)
     path = request.app.state.settings.data_dir / row["image_path"]
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Image file missing from data dir")
@@ -38,7 +27,7 @@ def get_scan_image(scan_id: str, request: Request) -> FileResponse:
 
 @router.get("/scans/{scan_id}/thumbnail")
 def get_scan_thumbnail(scan_id: str, request: Request) -> FileResponse:
-    row = _scan_row(request, scan_id)
+    row = scan_row(request, scan_id)
     data_dir = request.app.state.settings.data_dir
     if not (data_dir / row["image_path"]).is_file():
         raise HTTPException(status_code=404, detail="Image file missing from data dir")
@@ -58,7 +47,7 @@ def get_scan_preview(scan_id: str, request: Request) -> FileResponse:
     original loads. `detect_line_bands` also runs on this exact image, so its
     dimensions are load-bearing for auto-scroll. Pure cache; the original is
     untouched."""
-    row = _scan_row(request, scan_id)
+    row = scan_row(request, scan_id)
     data_dir = request.app.state.settings.data_dir
     if not (data_dir / row["image_path"]).is_file():
         raise HTTPException(status_code=404, detail="Image file missing from data dir")
@@ -79,7 +68,7 @@ def get_scan_line_bands(scan_id: str, request: Request) -> LineBands:
     line up with the on-screen image without any coordinate conversion. Bands are
     a pure function of the pixels — nothing is stored, and an undecodable image
     just yields no bands (the editor then doesn't auto-scroll, rather than erroring)."""
-    row = _scan_row(request, scan_id)
+    row = scan_row(request, scan_id)
     data_dir = request.app.state.settings.data_dir
     if not (data_dir / row["image_path"]).is_file():
         raise HTTPException(status_code=404, detail="Image file missing from data dir")
@@ -94,7 +83,7 @@ def get_scan_line_bands(scan_id: str, request: Request) -> LineBands:
 @router.delete("/scans/{scan_id}", status_code=204)
 def delete_scan(scan_id: str, request: Request) -> Response:
     """Remove one page (e.g. a blurry retake); remaining pages are renumbered 1..n."""
-    row = _scan_row(request, scan_id)
+    row = scan_row(request, scan_id)
     owner_id = current_user_id(request)
     enforce_limit(
         request,

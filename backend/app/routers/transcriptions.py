@@ -25,20 +25,9 @@ from ..recognition import (
 from ..schemas import Transcription, TranscriptionSave
 from ..security import enforce_limit, reject_idempotency, security_event
 from ..stf import validate_stf
+from ._common import scan_row
 
 router = APIRouter()
-
-
-def _scan_row(request: Request, scan_id: str) -> sqlite3.Row:
-    row = request.state.db.execute(
-        "SELECT sc.id, sc.song_id, sc.image_path, sc.content_type"
-        " FROM scans sc JOIN songs so ON so.id = sc.song_id"
-        " WHERE sc.id = ? AND so.owner_id = ?",
-        (scan_id, current_user_id(request)),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
-    return row
 
 
 def _to_response(row: sqlite3.Row) -> Transcription:
@@ -84,7 +73,7 @@ _FAILURE_DETAILS = {
 
 @router.get("/scans/{scan_id}/transcription", response_model=Transcription)
 def get_transcription(scan_id: str, request: Request) -> Transcription:
-    _scan_row(request, scan_id)  # 404 if the scan is unknown
+    scan_row(request, scan_id)  # 404 if the scan is unknown
     row = request.state.db.execute(_SELECT, (scan_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="No transcription for this scan yet")
@@ -110,7 +99,7 @@ def _recognize(
     request: Request,
     idempotency_key: str | None,
 ) -> Transcription:
-    scan = _scan_row(request, scan_id)
+    scan = scan_row(request, scan_id)
     conn: sqlite3.Connection = request.state.db
     owner_id = current_user_id(request)
     if idempotency_key is not None:
@@ -333,7 +322,7 @@ def _recognize(
 @router.put("/scans/{scan_id}/transcription", response_model=Transcription)
 def save_transcription(scan_id: str, body: TranscriptionSave, request: Request) -> Transcription:
     """Save the current STF view and append an immutable manual revision."""
-    _scan_row(request, scan_id)
+    scan_row(request, scan_id)
     owner_id = current_user_id(request)
     # Unlike upload/recognition there's no natural per-action cost gating this
     # write, so a runaway editor loop or script could otherwise hammer it. The

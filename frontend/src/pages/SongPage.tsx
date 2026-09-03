@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { deleteSong, getSong, scanThumbnailUrl, uploadScan } from "../api/client";
 import type { SongDetail } from "../api/types";
+import { deleteSongWarning } from "../songDelete";
 
 /**
  * Song detail: capture/upload sheet photos and browse the stored pages.
@@ -48,14 +49,7 @@ export function SongPage() {
 
   async function handleDeleteSong() {
     if (!song) return;
-    const pages = song.scans.length;
-    const displayTitle = song.title || "Untitled song";
-    const warning =
-      pages === 0
-        ? `Delete "${displayTitle}"?`
-        : `Delete "${displayTitle}" and its ${pages} ${pages === 1 ? "page" : "pages"}? ` +
-          "The original photos are removed too.";
-    if (!window.confirm(warning)) return;
+    if (!window.confirm(deleteSongWarning(song.title, song.scans.length))) return;
     try {
       await deleteSong(songId);
       navigate("/");
