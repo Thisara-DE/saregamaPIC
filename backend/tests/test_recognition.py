@@ -16,11 +16,17 @@ from app.config import Settings
 from app.main import create_app
 from app.recognition import (
     _SCHEMA_UNSUPPORTED_KEYWORDS,
+    STF_BODY_SCHEMA,
     STF_OUTPUT_SCHEMA,
+    SYSTEM_PROMPT,
+    SYSTEM_PROMPT_BODY,
     RecognitionResult,
     RecognitionUnavailable,
     make_recognizer,
+    make_tiled_recognizer,
     prepare_image,
+    prepare_tiles,
+    stitch_tiles,
 )
 
 _DRAFT_STF = {
@@ -89,6 +95,7 @@ def test_output_schema_avoids_keywords_structured_outputs_rejects():
                 walk(item, f"{path}[{index}]")
 
     walk(STF_OUTPUT_SCHEMA)
+    walk(STF_BODY_SCHEMA)
 
 
 def test_production_recognizer_requests_structured_output_and_handles_truncation(
@@ -107,10 +114,20 @@ def test_production_recognizer_requests_structured_output_and_handles_truncation
         usage=SimpleNamespace(input_tokens=10, output_tokens=20),
     )
 
-    class FakeMessages:
-        def create(self, **kwargs):
-            captured.update(kwargs)
+    class FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_final_message(self):
             return response
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            captured.update(kwargs)
+            return FakeStream()
 
     monkeypatch.setattr(
         anthropic,
@@ -360,6 +377,137 @@ def test_transcription_404_before_recognition(client):
     assert client.post("/api/scans/nope/recognize").status_code == 404
 
 
+def test_save_transcription_rejects_an_oversized_line(client):
+    """One PUT with a 20,000-line x 5,000-char body once grew the SQLite file to
+    300+ MB in one request; the per-line text cap is the first guard against it."""
+    _, scan_id = _scan(client)
+    body = {
+        "stf": {"header": {}, "lines": [{"n": 1, "kind": "sargam", "text": "S" * 2001}]},
+        "status": "draft",
+    }
+    r = client.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert r.status_code == 422
+
+
+def test_save_transcription_rejects_too_many_lines(client):
+    """Second guard against the same oversized-PUT abuse: bound line COUNT too,
+    not just per-line length."""
+    _, scan_id = _scan(client)
+    body = {
+        "stf": {
+            "header": {},
+            "lines": [{"n": i, "kind": "sargam", "text": "S"} for i in range(1001)],
+        },
+        "status": "draft",
+    }
+    r = client.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert r.status_code == 422
+
+
+def test_save_transcription_rejects_an_illegal_kind(client):
+    """`text`'s max_length alone was not enough: a 100,000-char `kind` on 1000
+    lines reproduces the same disk-fill through a different field, since `kind`
+    previously had no constraint at all. It must be one of the legal values."""
+    _, scan_id = _scan(client)
+    body = {
+        "stf": {"header": {}, "lines": [{"n": 1, "kind": "X" * 100_000, "text": "S"}]},
+        "status": "draft",
+    }
+    r = client.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert r.status_code == 422
+
+
+def test_save_transcription_rate_limited(tmp_path):
+    """Bounding one request's size isn't enough on its own — a script could still
+    send many legal-sized saves back to back, so the endpoint also needs its own
+    rate limit (every other write path already has one)."""
+    settings = Settings(
+        data_dir=tmp_path / "data", transcription_save_limit_per_minute=1
+    )
+    with TestClient(create_app(settings, recognizer=_fake_recognizer)) as limited:
+        song_id = limited.post("/api/songs", json={"title": "Rate"}).json()["id"]
+        scan_id = limited.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("p.jpg", io.BytesIO(_jpeg(80, 60)), "image/jpeg")},
+        ).json()["id"]
+        body = {"stf": {"header": {}, "lines": []}, "status": "draft"}
+        first = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+        second = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "60"
+
+
+def test_save_transcription_daily_quota(tmp_path):
+    """The per-minute limit only slows a disk fill — transcription_revisions is
+    append-only, so even legal-sized saves add up fast at 60/minute. A daily
+    quota closes that, matching the rate+quota pair every other bounded write
+    path (upload, recognition) already has."""
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        transcription_save_limit_per_minute=10,
+        transcription_save_quota_per_day=1,
+    )
+    with TestClient(create_app(settings, recognizer=_fake_recognizer)) as limited:
+        song_id = limited.post("/api/songs", json={"title": "Quota"}).json()["id"]
+        scan_id = limited.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("p.jpg", io.BytesIO(_jpeg(80, 60)), "image/jpeg")},
+        ).json()["id"]
+        body = {"stf": {"header": {}, "lines": []}, "status": "draft"}
+        first = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+        second = limited.put(f"/api/scans/{scan_id}/transcription", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Daily transcription save quota reached"
+    assert second.headers["retry-after"] == "86400"
+
+
+def test_get_returns_a_stored_transcription_with_an_illegal_kind(client):
+    """Same inbound/outbound split regression as the oversized-text test below,
+    for the `kind` constraint specifically: a row stored with a `kind` outside
+    the legal set (older data, or data from before this fix) must still GET
+    back as 200, not fail response validation."""
+    _, scan_id = _scan(client)
+    stored_stf = json.dumps(
+        {"header": {}, "lines": [{"n": 1, "kind": "not-a-real-kind", "text": "S"}]}
+    )
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO transcriptions (id, scan_id, stf_json, status)"
+            " VALUES ('preexisting-kind', ?, ?, 'reviewed')",
+            (scan_id, stored_stf),
+        )
+        conn.commit()
+    r = client.get(f"/api/scans/{scan_id}/transcription")
+    assert r.status_code == 200
+    assert r.json()["stf"]["lines"][0]["kind"] == "not-a-real-kind"
+
+
+def test_get_returns_a_stored_transcription_that_exceeds_the_new_save_limits(client):
+    """Regression guard for the inbound/outbound split: `Transcription.stf` (the
+    GET response model) must stay permissive. If the new save-time bounds were
+    ever applied to the shared `Stf`/`StfLine` model instead of a write-only
+    copy, a row already in the database above the limit — exactly what a
+    deployed database could hold before this fix shipped — would fail response
+    validation and turn a readable page into a 500."""
+    _, scan_id = _scan(client)
+    oversized_text = "S " * 2000  # far past the 2000-char save-time cap
+    oversized_stf = json.dumps(
+        {"header": {}, "lines": [{"n": 1, "kind": "sargam", "text": oversized_text}]}
+    )
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO transcriptions (id, scan_id, stf_json, status)"
+            " VALUES ('preexisting', ?, ?, 'reviewed')",
+            (scan_id, oversized_stf),
+        )
+        conn.commit()
+    r = client.get(f"/api/scans/{scan_id}/transcription")
+    assert r.status_code == 200
+    assert r.json()["stf"]["lines"][0]["text"] == oversized_text
+
+
 def test_recognition_unavailable_returns_503(tmp_path, caplog):
     def unavailable(_data, _ct):
         raise RecognitionUnavailable("ANTHROPIC_API_KEY is not set")
@@ -421,3 +569,157 @@ def test_failed_idempotent_recognition_replays_error_without_second_model_call(t
     assert calls == 1
     assert action[0] == "completed"
     assert run == ("failed", "invalid_json")
+
+
+# --- Phase 3.5 Rung 1 tiled recognizer (offline experiment variant) ----------
+
+# Frozen hash of the whole-page prompt. PROMPT_VERSION is pinned and 4/5 baseline
+# sheets used this exact text; the tiled-experiment refactor split it into shared
+# fragments, so this guards the control against a byte-level drift the split could
+# introduce. Recompute deliberately (and bump PROMPT_VERSION) if the prompt changes.
+_SYSTEM_PROMPT_SHA256 = "8b2462f8d65bd62bcfc96bd48f83f2136b9bf371fa9c556f07da1c30e208dbae"
+
+
+def test_whole_page_prompt_is_unchanged_by_the_tiling_split():
+    import hashlib
+
+    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == _SYSTEM_PROMPT_SHA256
+
+
+def test_body_prompt_shares_the_notation_contract_but_drops_header_and_title():
+    from app.recognition import _LINE_KINDS_AND_RULES, _NOTATION_CONTRACT
+
+    # The two prompts must not drift apart on the notation/line-kind/rules rules.
+    assert _NOTATION_CONTRACT in SYSTEM_PROMPT and _NOTATION_CONTRACT in SYSTEM_PROMPT_BODY
+    assert _LINE_KINDS_AND_RULES in SYSTEM_PROMPT and _LINE_KINDS_AND_RULES in SYSTEM_PROMPT_BODY
+    # A band carries no header/title — only the top band does, via SYSTEM_PROMPT.
+    # (The body prompt still tells the model NOT to emit song_title, so it names
+    # the field; what must be gone are the capture-instruction sections.)
+    assert "## The header" not in SYSTEM_PROMPT_BODY
+    assert "## The song title" not in SYSTEM_PROMPT_BODY
+    assert "song_title" not in STF_BODY_SCHEMA["properties"]
+    assert STF_BODY_SCHEMA["required"] == ["lines"]
+
+
+def test_prepare_tiles_splits_into_overlapping_capped_bands():
+    from app.recognition import _TILE_MAX_EDGE, _TILE_MAX_PIXELS
+
+    bands = prepare_tiles(_jpeg(2000, 4000), tiles=2)
+    assert len(bands) == 2
+    heights = []
+    for jpeg, media_type in bands:
+        assert media_type == "image/jpeg"
+        with Image.open(io.BytesIO(jpeg)) as im:
+            w, h = im.size
+            heights.append(h)
+            # Each band is kept under BOTH per-image caps so the API shows it at
+            # native detail instead of downscaling it server-side.
+            assert max(w, h) <= _TILE_MAX_EDGE
+            assert w * h <= _TILE_MAX_PIXELS
+    # Bands overlap: their heights sum to more than a clean half-and-half split.
+    assert sum(heights) > max(heights) * 2 * 0.9
+
+
+def test_stitch_tiles_concatenates_dedupes_overlap_and_renumbers():
+    header = {"concert_scale": "G", "alto_scale": "E", "beat": "4/4"}
+    top = [
+        {"n": 1, "kind": "section", "text": "Intro"},
+        {"n": 2, "kind": "sargam", "text": "S R G M"},
+        {"n": 3, "kind": "sargam", "text": "P D N S'"},
+    ]
+    # The lower band re-sees the last row of the top band (a near-identical read),
+    # then adds new rows below it.
+    bottom = [
+        {"n": 1, "kind": "sargam", "text": "P D N S'"},
+        {"n": 2, "kind": "sargam", "text": "S' N D P"},
+        {"n": 3, "kind": "lyric", "text": "sinhala"},
+    ]
+    stitched = stitch_tiles(header, [top, bottom])
+    assert stitched["header"] == header
+    texts = [line["text"] for line in stitched["lines"]]
+    assert texts == ["Intro", "S R G M", "P D N S'", "S' N D P", "sinhala"]
+    assert [line["n"] for line in stitched["lines"]] == [1, 2, 3, 4, 5]
+
+
+def test_stitch_tiles_keeps_distinct_lines_that_merely_look_alike():
+    # No genuine overlap: a coincidental resemblance at the seam must NOT be
+    # dropped. Different kinds never match; unlike text never matches.
+    top = [{"n": 1, "kind": "sargam", "text": "S R G M"}]
+    bottom = [{"n": 1, "kind": "sargam", "text": "P D N S"}]
+    stitched = stitch_tiles({}, [top, bottom])
+    assert [line["text"] for line in stitched["lines"]] == ["S R G M", "P D N S"]
+
+
+def _tile_response(payload: dict):
+    return SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text=json.dumps(payload))],
+        model="claude-opus-4-8",
+        usage=SimpleNamespace(input_tokens=100, output_tokens=50),
+    )
+
+
+def test_tiled_recognizer_takes_header_from_top_band_and_stitches_body(monkeypatch):
+    captured = []
+    responses = iter(
+        [
+            _tile_response(
+                {
+                    "song_title": "Sanda Eliya",
+                    "header": {"concert_scale": "G", "alto_scale": "E", "beat": "4/4"},
+                    "lines": [
+                        {"n": 1, "kind": "section", "text": "Intro"},
+                        {"n": 2, "kind": "sargam", "text": "S R_ G M"},
+                    ],
+                }
+            ),
+            _tile_response(
+                # Body band: lines only, no header/title. Its first row repeats the
+                # top band's last row (overlap) and must be deduped away.
+                {
+                    "lines": [
+                        {"n": 1, "kind": "sargam", "text": "S R_ G M"},
+                        {"n": 2, "kind": "sargam", "text": "P D N S'"},
+                    ]
+                }
+            ),
+        ]
+    )
+
+    class FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_final_message(self):
+            return next(responses)
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            captured.append(kwargs)
+            return FakeStream()
+
+    monkeypatch.setattr(
+        anthropic,
+        "Anthropic",
+        lambda **_kwargs: SimpleNamespace(messages=FakeMessages()),
+    )
+
+    recognizer = make_tiled_recognizer("test-key", "claude-opus-4-8", tiles=2)
+    result = recognizer(_jpeg(1200, 2400), "image/jpeg")
+
+    # Two band calls: top uses the full schema, body uses the lines-only schema.
+    assert len(captured) == 2
+    assert captured[0]["output_config"]["format"]["schema"] is STF_OUTPUT_SCHEMA
+    assert captured[1]["output_config"]["format"]["schema"] is STF_BODY_SCHEMA
+    assert captured[1]["system"] == SYSTEM_PROMPT_BODY
+    # Header + title come from the top band; body is stitched with overlap dropped.
+    assert result.suggested_title == "Sanda Eliya"
+    assert result.stf["header"] == {"concert_scale": "G", "alto_scale": "E", "beat": "4/4"}
+    assert [line["text"] for line in result.stf["lines"]] == ["Intro", "S R_ G M", "P D N S'"]
+    assert [line["n"] for line in result.stf["lines"]] == [1, 2, 3]
+    # Tokens are summed across bands.
+    assert result.input_tokens == 200
+    assert result.output_tokens == 100

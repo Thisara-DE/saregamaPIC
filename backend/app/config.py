@@ -76,6 +76,46 @@ class Settings:
             os.environ.get("SAREGAMAPIC_DESTRUCTIVE_LIMIT_1H", "100")
         )
     )
+    # Transcription saves are the one write path with no natural per-action cost
+    # (unlike an upload or a Claude call), so an editor bug or script could hammer
+    # it fast; the limit only needs to sit comfortably above real autosave/typing
+    # cadence, not below it.
+    transcription_save_limit_per_minute: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_TRANSCRIPTION_SAVE_LIMIT_1M", "60")
+        )
+    )
+    # The per-minute limit only slows a fill, it doesn't close it:
+    # transcription_revisions is append-only, so even legal-sized saves
+    # (~2 MB at the max bound) at 60/minute is ~7 GB/hour. Every other bounded
+    # write path pairs a rate limit with a daily quota (upload, recognition);
+    # this is that pair for saves. 2000/day is far beyond a real correction
+    # session (the whole reviewed baseline corpus is a few hundred saves total)
+    # but caps the append-only growth to a bounded amount per user per day.
+    transcription_save_quota_per_day: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_TRANSCRIPTION_SAVE_QUOTA_DAY", "2000")
+        )
+    )
+    # Retention windows for the startup prune (finding #5). Sessions and
+    # recognition-idempotency rows accumulate forever otherwise; the app sweeps
+    # them opportunistically on boot. Env-configurable precisely so a future
+    # scheduled/cron prune (the scaling path) can reuse the same knobs.
+    session_revoked_retention_days: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_SESSION_REVOKED_RETENTION_DAYS", "7")
+        )
+    )
+    recognition_idempotency_retention_days: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SAREGAMAPIC_RECOGNITION_IDEMPOTENCY_RETENTION_DAYS", "7")
+        )
+    )
+    # Railway captures container stdout/stderr as-is; this only controls what
+    # "saregamapic" (incl. "saregamapic.security") emits into that stream.
+    log_level: str = field(
+        default_factory=lambda: os.environ.get("SAREGAMAPIC_LOG_LEVEL", "INFO")
+    )
     # Claude vision recognition (Phase 2). The key is read from the environment
     # and never committed. Empty = recognition returns a
     # clean 503 until a key is exported.
@@ -127,6 +167,8 @@ class Settings:
             "SAREGAMAPIC_RECOGNITION_LIMIT_1H": self.recognition_limit_per_hour,
             "SAREGAMAPIC_RECOGNITION_QUOTA_DAY": self.recognition_quota_per_day,
             "SAREGAMAPIC_DESTRUCTIVE_LIMIT_1H": self.destructive_limit_per_hour,
+            "SAREGAMAPIC_TRANSCRIPTION_SAVE_LIMIT_1M": self.transcription_save_limit_per_minute,
+            "SAREGAMAPIC_TRANSCRIPTION_SAVE_QUOTA_DAY": self.transcription_save_quota_per_day,
         }
         invalid = [name for name, value in limits.items() if value < 1]
         if invalid:

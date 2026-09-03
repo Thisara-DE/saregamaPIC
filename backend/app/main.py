@@ -1,5 +1,6 @@
 """App factory."""
 
+import logging
 import sqlite3
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -27,8 +28,13 @@ from .auth import (
 )
 from .config import APP_VERSION, Settings
 from .recognition import Recognizer, make_recognizer
+from .retention import prune_expired
 from .routers import learning, scans, songs, transcriptions
 from .schemas import Health
+from .security import configure_logging
+from .storage import data_dir_is_ephemeral
+
+logger = logging.getLogger("saregamapic")
 
 
 class SpaStaticFiles(StaticFiles):
@@ -50,6 +56,9 @@ class SpaStaticFiles(StaticFiles):
 
 def create_app(settings: Settings | None = None, recognizer: Recognizer | None = None) -> FastAPI:
     settings = settings or Settings()
+    # Tied to create_app() (not the lifespan) so it takes effect for every test
+    # client too, since some tests build an app without ever starting it.
+    configure_logging(settings.log_level)
     # Tests inject a fake recognizer; production builds the real Claude client
     # lazily (no SDK import / API key needed unless recognition is actually run).
     recognizer = recognizer or make_recognizer(
@@ -60,10 +69,26 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.validate_auth()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        if data_dir_is_ephemeral(settings.data_dir):
+            # Loud, because the symptom is silent: the app starts perfectly and
+            # simply has no songs, scans, or sessions from before the deploy.
+            logger.error(
+                "%s is not a mounted volume — the database, the original scans, and "
+                "every signed-in session will be discarded on the next deploy. "
+                "Attach a persistent volume to this service at %s.",
+                settings.data_dir,
+                settings.data_dir,
+            )
         db.migrate(settings.db_path)
         conn = db.connect(settings.db_path)
         try:
             prepare_initial_owner(conn, settings)
+            # Opportunistic retention prune (finding #5). Non-fatal: a prune that
+            # can't run must never stop the app from serving.
+            try:
+                prune_expired(conn, settings)
+            except sqlite3.Error:
+                logger.warning("startup retention prune failed", exc_info=True)
         finally:
             conn.close()
         yield
@@ -85,9 +110,22 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     async def db_and_auth(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        request.state.request_id = uuid.uuid4().hex
+
+        def with_request_id(response: Response) -> Response:
+            response.headers["X-Request-ID"] = request.state.request_id
+            return response
+
+        # Static assets — the SPA shell, /assets/*.js, icons, the service worker —
+        # touch neither the database nor the session. Opening a SQLite connection
+        # (which runs two PRAGMAs) and, with auth on, a session SELECT for every
+        # one of them was pure overhead; only /api/* needs the connection and the
+        # auth gate. The connection lives no longer than the request either way.
+        if not request.url.path.startswith("/api/"):
+            return with_request_id(await call_next(request))
+
         conn: sqlite3.Connection = db.connect(settings.db_path)
         request.state.db = conn
-        request.state.request_id = uuid.uuid4().hex
         try:
             session_token = request.cookies.get(SESSION_COOKIE)
             authenticated_session = None
@@ -101,13 +139,17 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
                     "/api/auth/login",
                     "/api/auth/callback",
                 }
-                if request.url.path.startswith("/api/") and not public_path:
+                if not public_path:
                     if request.state.user_id is None:
-                        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                        return with_request_id(
+                            JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                        )
                     try:
                         require_same_origin(request, settings)
                     except StarletteHTTPException as exc:
-                        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+                        return with_request_id(
+                            JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+                        )
             else:
                 request.state.user_id = INITIAL_OWNER_ID
             response = await call_next(request)
@@ -117,8 +159,7 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
                 and session_token is not None
             ):
                 renew_session(conn, session_token, settings, response)
-            response.headers["X-Request-ID"] = request.state.request_id
-            return response
+            return with_request_id(response)
         finally:
             conn.close()
 

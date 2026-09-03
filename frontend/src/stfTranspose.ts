@@ -3,8 +3,8 @@
 // standard v1.1); the Digital view (and, later, the Western view) are DERIVED by
 // rotating a copy of the text through this pure module.
 //
-// Semantics (project notation standard v1.1,
-// v1.1"): each sargam letter is a fixed fingering name, i.e. a pitch class
+// Semantics (project notation standard v1.1): each sargam letter is a fixed
+// fingering name, i.e. a pitch class
 // measured in semitones from S. Transposing to a new scale rotates every note by
 // the interval between the source and target tonic and re-renders the letters —
 // the fingering PATTERN relative to the (new) S is unchanged, so the same melody
@@ -22,6 +22,8 @@
 // illegal accidentals (`S_`, `M_`, `R^` …) are passed through VERBATIM — matching
 // the app's "flag, don't silently fix" rule; the advisory validator surfaces them
 // and the reviewer fixes them in the ORIGINAL scale, never here.
+
+import { NOTE_KINDS, noteTokenRegex } from "./stfGrammar";
 
 // Semitones from S for each natural letter — the fixed-S chromatic space
 // (mirrors backend NATURAL_PC in stf.py).
@@ -52,9 +54,6 @@ const PC_TOKEN: { letter: string; accidental: "" | "_" | "^" }[] = [
   { letter: "N", accidental: "_" }, // 10 N♭
   { letter: "N", accidental: "" }, // 11
 ];
-
-// A sargam note token: a letter then any mix of octave dots and one accidental.
-const NOTE_RE = /[SRGMPDN][_^',]*/g;
 
 // Western note name -> pitch class (0..11), for scale selectors / header labels
 // (mirrors backend _NOTE_BASE in stf.py).
@@ -169,7 +168,7 @@ function renderAbsolute(absolute: number): string {
  */
 export function transposeLine(text: string, semitones: number): string {
   if (semitones === 0) return text; // identity: keep stored text byte-for-byte
-  return text.replace(NOTE_RE, (token) => {
+  return text.replace(noteTokenRegex(), (token) => {
     const note = parseLegalNote(token);
     if (!note) return token; // alien letter / illegal accidental → verbatim
     const absolute =
@@ -181,10 +180,6 @@ export function transposeLine(text: string, semitones: number): string {
 function accidentalOffset(accidental: "" | "_" | "^"): number {
   return accidental === "_" ? -1 : accidental === "^" ? 1 : 0;
 }
-
-// Line kinds that carry note tokens (mirrors backend _NOTE_KINDS). Others
-// (section, lyric, roadmap, annotation) are free text and pass through untouched.
-const NOTE_KINDS = new Set(["sargam", "run"]);
 
 /**
  * Transpose a note-bearing line, or return non-note lines unchanged. `kind` is

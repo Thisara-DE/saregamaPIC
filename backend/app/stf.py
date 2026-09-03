@@ -30,7 +30,18 @@ FLAT_ALLOWED = {"R", "G", "D", "N"}
 _NOTE_BASE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
 # A sargam note token: a letter, then any mix of octave dots and one accidental.
-_NOTE_RE = re.compile(r"[SRGMPDN][_^',]*")
+# The one source of the note-token grammar on the backend — `learning.py` imports
+# this pattern rather than re-spelling it, and the frontend mirrors it in
+# `frontend/src/stfGrammar.ts` (cross-language, so one-per-language, cross-referenced).
+# It is spliced into larger alternations (e.g. `learning.TOKEN_RE`), so keep it a
+# single self-contained alternative with no top-level `|`, or its consumers must
+# wrap it in a group.
+# bandit B105 flags this as a "hardcoded password" only because the name contains
+# "TOKEN" — it is a note-grammar regex (a character class), never a credential.
+# Suppress that one test rather than renaming the anchor that `learning.TOKEN_RE`
+# and the frontend `noteTokenRegex` deliberately mirror, or disabling bandit.
+NOTE_TOKEN_PATTERN = r"[SRGMPDN][_^',]*"  # nosec B105
+_NOTE_RE = re.compile(NOTE_TOKEN_PATTERN)
 # Any OTHER capital letter in a note line is not sargam — almost always a
 # recognition misread (e.g. B for R). Flag it loudly.
 _ALIEN_LETTER_RE = re.compile(r"[A-Z]")
@@ -92,8 +103,16 @@ def _line_warnings(line_no: int, text: str) -> list[str]:
     return warnings
 
 
-# Line kinds that carry sargam note tokens (worth validating). Others (lyric,
-# section, roadmap, annotation) are free text and pass through untouched.
+# Every legal STF line kind, in the order the notation standard lists them.
+# This is notation vocabulary, so it lives here with the rest of the format:
+# `recognition.STF_OUTPUT_SCHEMA` constrains the model to it and
+# `schemas.StfLineIn` validates saves against it, both importing from here so
+# the three can never drift.
+STF_LINE_KINDS = ("section", "sargam", "run", "lyric", "roadmap", "annotation")
+
+# The subset of the above that carries sargam note tokens (worth validating).
+# Others (lyric, section, roadmap, annotation) are free text and pass through
+# untouched.
 _NOTE_KINDS = {"sargam", "run"}
 
 # A sheet with at least this many barred `sargam` lines but zero curves is almost

@@ -8,8 +8,15 @@ from difflib import SequenceMatcher
 from statistics import mean
 from typing import Any
 
-NOTE_RE = re.compile(r"[SRGMPDN](?:['_^,]*)")
-TOKEN_RE = re.compile(r"[SRGMPDN](?:['_^,]*)|//|[|()+\-\[\]]|[^\s]")
+from .stf import NOTE_TOKEN_PATTERN
+
+# Note-token grammar is single-sourced in stf.py; this module composes the fuller
+# STF tokenizer from it so the two can never drift (finding #6). The pattern is
+# wrapped in a non-capturing group before being spliced into the alternation —
+# `|` has the lowest precedence, so an un-grouped pattern would silently
+# re-associate the moment the grammar gains a top-level `|` (finding #11).
+NOTE_RE = re.compile(NOTE_TOKEN_PATTERN)
+TOKEN_RE = re.compile(f"(?:{NOTE_TOKEN_PATTERN})" + r"|//|[|()+\-\[\]]|[^\s]")
 
 
 def _stf_tokens(stf: dict[str, Any]) -> list[str]:

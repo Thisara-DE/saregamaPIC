@@ -35,6 +35,34 @@ MAX_IMAGE_PIXELS = 60_000_000
 _PNG_END = bytes.fromhex("0000000049454e44ae426082")
 
 
+# The path the Docker image points SAREGAMAPIC_DATA_DIR at. A deployment is only
+# durable if a volume is mounted here; without one this is ordinary container
+# storage, and every deploy starts from an empty one.
+CONTAINER_DATA_DIR = Path("/data")
+
+
+def data_dir_is_ephemeral(
+    data_dir: Path,
+    *,
+    container_dir: Path = CONTAINER_DATA_DIR,
+    root: Path = Path("/"),
+) -> bool:
+    """True when the deployed data directory is NOT on a mounted volume.
+
+    A mount has its own device id, so a `/data` sharing the root filesystem's
+    device means nothing was attached — the database, the original scans, and
+    every login session are discarded on the next deploy. Checked only for the
+    container path: a local checkout keeps `data/` inside the repo, where
+    sharing the root device is normal and says nothing.
+    """
+    if data_dir != container_dir:
+        return False
+    try:
+        return data_dir.stat().st_dev == root.stat().st_dev
+    except OSError:
+        return False
+
+
 class InvalidImage(ValueError):
     """The upload is not a safe, fully decodable image of its declared type."""
 

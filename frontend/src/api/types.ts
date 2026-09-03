@@ -1,5 +1,8 @@
 // Mirrors backend/app/schemas.py — keep the two in sync by hand (the API is
-// small; add a generated client only if it grows past a handful of routes).
+// small; add a generated client only if it grows past a handful of routes). The
+// status unions below are typed as Literal on the backend and guarded against
+// drift by backend/tests/test_schema_drift.py, which fails CI if a backend
+// status set is missing here.
 
 export interface Song {
   id: string;
@@ -10,6 +13,13 @@ export interface Song {
   // First page's scan id (null when the song has no pages yet) — the
   // gallery uses it to show a cover thumbnail without fetching details.
   cover_scan_id: string | null;
+  // First page that has a transcription (null when nothing is transcribed yet).
+  // Lets the gallery link straight to the digital view, and disable that link,
+  // without fetching every page's transcription.
+  digital_page_no: number | null;
+  // Gallery progress pill: "new" (nothing transcribed), "draft" (at least one
+  // page is a draft), or "reviewed" (every page reviewed — shown as no pill).
+  status: "new" | "draft" | "reviewed";
 }
 
 export interface Scan {
@@ -18,6 +28,9 @@ export interface Scan {
   page_no: number;
   content_type: string;
   uploaded_at: string;
+  // This page's transcription status: "new" (not recognized), "draft", or
+  // "reviewed". A freshly uploaded scan has no transcription yet, so "new".
+  status: "new" | "draft" | "reviewed";
 }
 
 export interface SongDetail extends Song {
@@ -34,10 +47,40 @@ export interface Health {
   version: string;
 }
 
+// Per-line photo bands for the editor's auto-scroll (finding #11). Computed on
+// demand from the scan, never stored; y0/y1 are normalized to [0,1] of image
+// height. Mirror backend/app/schemas.py by hand.
+export interface LineBand {
+  y0: number;
+  y1: number;
+}
+
+export interface LineBands {
+  bands: LineBand[];
+}
+
 export interface AuthUser {
   id: string;
   email: string;
   display_name: string;
+  // True only for the initial owner — the sole admin, who can invite others
+  // (finding #18). The frontend uses it to show/hide the access UI; the backend
+  // enforces it on the endpoints regardless.
+  is_admin: boolean;
+}
+
+// A user in the invite allowlist. Mirrors backend UserStatus (Literal) — the
+// alias form is required by tests/test_schema_drift.py, which asserts this exact
+// union. "invited" = added but never signed in; "active" = has signed in;
+// "disabled" = access revoked.
+export type UserStatus = "invited" | "active" | "disabled";
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  display_name: string;
+  status: UserStatus;
+  created_at: string;
 }
 
 // --- Transcriptions (STF) — mirror backend/app/schemas.py by hand ---

@@ -118,6 +118,34 @@ implementation plan are maintained in the project's private documentation.
 Vite remains on 6.x while the development machine uses Node 20.8. Upgrade Node to a
 current LTS release before moving to a newer Vite major version.
 
+### Dropbox-ignored dependency folders (Windows dev machine)
+
+The repo lives inside Dropbox, so `frontend/node_modules` and `backend/.venv` each
+carry a `com.dropbox.ignored` NTFS alternate data stream. It tells Dropbox not to
+sync them; without it Dropbox indexes the thousands of files inside, holds file
+locks, and breaks Vite/uv — the usual symptom is a half-populated `node_modules`
+with no `.bin`, so `npm test`/`lint`/`build` all fail. **Whenever you recreate
+either folder, re-apply the stream.**
+
+Repair (rebuild `frontend/node_modules` from scratch — same shape for `backend/.venv`
+with `uv sync`):
+
+```powershell
+cd frontend
+# 1. If a broken folder is still there, mark it ignored first so Dropbox releases
+#    its locks, then delete it (retry the delete while Dropbox lets go).
+Set-Content node_modules -Stream com.dropbox.ignored -Value 1
+Remove-Item node_modules -Recurse -Force   # repeat if it reports "used by another process"
+# 2. Recreate the folder and set the stream BEFORE installing, so Dropbox never
+#    touches the fresh tree. Use npm install (in-place) — npm ci deletes the whole
+#    folder and would drop the stream mid-install.
+New-Item -ItemType Directory node_modules | Out-Null
+Set-Content node_modules -Stream com.dropbox.ignored -Value 1
+npm install
+# 3. Verify the stream survived and the toolchain is back.
+Get-Content node_modules -Stream com.dropbox.ignored   # -> 1
+```
+
 ### Run locally
 
 ```powershell
@@ -253,3 +281,14 @@ scripts/   Development launcher and icon-generation utility
 samples/   Read-only real-sheet recognition evaluation set
 data/      Runtime database, immutable originals, and derived image caches
 ```
+
+---
+
+## License and copyright
+
+Copyright © 2026 Thisara Mallawa Arachchige. **All rights reserved.**
+
+This is proprietary software. It is **not** open source and carries no
+permission to use, copy, modify, or distribute it. No license is granted by the
+publication of this repository — see the [LICENSE](LICENSE) file for the full
+terms. Any use requires the prior written permission of the author.

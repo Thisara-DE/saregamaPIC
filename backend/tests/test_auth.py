@@ -88,14 +88,20 @@ def test_auth_rejects_missing_session_and_cross_origin_mutation(
     auth_client, auth_settings
 ):
     assert auth_client.get("/api/health").status_code == 200
-    assert auth_client.get("/api/songs").status_code == 401
+    # The 401/403 early returns still carry X-Request-ID, so a denied request is
+    # traceable to its security_event log line just like a served one.
+    unauth = auth_client.get("/api/songs")
+    assert unauth.status_code == 401
+    assert len(unauth.headers["x-request-id"]) == 32
 
     owner_id = _activate_user(
         auth_settings, "owner@example.com", INITIAL_OWNER_ID
     )
     _as(auth_client, _session(auth_settings, owner_id))
     assert auth_client.get("/api/songs").status_code == 200
-    assert auth_client.post("/api/songs", json={"title": "No origin"}).status_code == 403
+    cross_origin = auth_client.post("/api/songs", json={"title": "No origin"})
+    assert cross_origin.status_code == 403
+    assert len(cross_origin.headers["x-request-id"]) == 32
     assert _post(auth_client, "/api/songs", json={"title": "Allowed"}).status_code == 201
 
 
@@ -237,6 +243,7 @@ def test_google_callback_activates_invited_owner_and_preserves_return_path(
         "id": INITIAL_OWNER_ID,
         "email": "owner@example.com",
         "display_name": "Thisara",
+        "is_admin": True,
     }
 
 
@@ -300,6 +307,101 @@ def test_two_users_cannot_discover_or_access_each_others_resources(
     _as(auth_client, token_a)
     assert auth_client.get(f"/api/songs/{song['id']}").status_code == 200
     assert auth_client.get(f"/api/scans/{scan['id']}/image").status_code == 200
+
+
+def test_admin_flag_is_true_only_for_the_initial_owner(auth_client, auth_settings):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    other_id = _activate_user(auth_settings, "other@example.com")
+
+    _as(auth_client, _session(auth_settings, owner_id))
+    assert auth_client.get("/api/auth/me").json()["is_admin"] is True
+
+    _as(auth_client, _session(auth_settings, other_id))
+    assert auth_client.get("/api/auth/me").json()["is_admin"] is False
+
+
+def test_admin_invites_email_and_invitee_can_then_sign_in(auth_client, auth_settings):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    _as(auth_client, _session(auth_settings, owner_id))
+
+    # Admin adds an email; it lands as 'invited', display_name still blank.
+    created = _post(auth_client, "/api/auth/users", json={"email": "Friend@Example.com"})
+    assert created.status_code == 201
+    body = created.json()
+    assert body["email"] == "friend@example.com"  # normalized
+    assert body["status"] == "invited"
+    assert body["display_name"] == ""
+    assert body["id"] != INITIAL_OWNER_ID
+
+    # The access list now shows both, ordered by created_at (owner first).
+    listed = auth_client.get("/api/auth/users").json()
+    assert [u["email"] for u in listed] == ["owner@example.com", "friend@example.com"]
+    assert {u["status"] for u in listed} == {"active", "invited"}
+
+    # The invited person can now complete Google sign-in, which activates them.
+    class FriendGoogle:
+        async def authorize_redirect(self, request, redirect_uri):
+            return RedirectResponse("https://accounts.google.test/login")
+
+        async def authorize_access_token(self, request):
+            return {
+                "userinfo": {
+                    "sub": "friend-subject-1",
+                    "email": "friend@example.com",
+                    "email_verified": True,
+                    "name": "Friend",
+                }
+            }
+
+    auth_client.app.state.oauth = SimpleNamespace(google=FriendGoogle())
+    auth_client.cookies.clear()
+    auth_client.get("/api/auth/login", follow_redirects=False)
+    assert auth_client.get("/api/auth/callback", follow_redirects=False).status_code == 303
+    me = auth_client.get("/api/auth/me").json()
+    assert me == {
+        "id": body["id"],
+        "email": "friend@example.com",
+        "display_name": "Friend",
+        "is_admin": False,
+    }
+
+
+def test_non_admin_cannot_list_or_invite(auth_client, auth_settings):
+    _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    other_id = _activate_user(auth_settings, "other@example.com")
+    _as(auth_client, _session(auth_settings, other_id))
+
+    assert auth_client.get("/api/auth/users").status_code == 403
+    invite = _post(auth_client, "/api/auth/users", json={"email": "sneaky@example.com"})
+    assert invite.status_code == 403
+    # And the row was never created.
+    conn = db.connect(auth_settings.db_path)
+    try:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE email = ?", ("sneaky@example.com",)
+            ).fetchone()["n"]
+            == 0
+        )
+    finally:
+        conn.close()
+
+
+def test_inviting_an_existing_email_conflicts(auth_client, auth_settings):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    _activate_user(auth_settings, "already@example.com")
+    _as(auth_client, _session(auth_settings, owner_id))
+
+    conflict = _post(auth_client, "/api/auth/users", json={"email": "already@example.com"})
+    assert conflict.status_code == 409
+    assert "active" in conflict.json()["detail"]
+
+
+def test_invite_rejects_a_malformed_email(auth_client, auth_settings):
+    owner_id = _activate_user(auth_settings, "owner@example.com", INITIAL_OWNER_ID)
+    _as(auth_client, _session(auth_settings, owner_id))
+    for bad in ["notanemail", "no@domain", "@example.com", "spaces in@x.com"]:
+        assert _post(auth_client, "/api/auth/users", json={"email": bad}).status_code == 422
 
 
 def test_recognition_baseline_is_scoped_to_its_owner(auth_settings):

@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { importSong, listSongs, scanThumbnailUrl } from "../api/client";
+import {
+  deleteSong,
+  importSong,
+  listSongs,
+  renameSong,
+  scanThumbnailUrl,
+} from "../api/client";
 import type { Song } from "../api/types";
 
 export function SongsPage() {
@@ -11,6 +17,9 @@ export function SongsPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [creating, setCreating] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const cameraInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -29,6 +38,74 @@ export function SongsPage() {
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [selectedFile]);
+
+  // An open menu should not survive a tap elsewhere or an Escape.
+  useEffect(() => {
+    if (menuFor === null) return;
+    function dismiss(event: Event) {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") setMenuFor(null);
+        return;
+      }
+      // A pointerdown INSIDE the open menu (its ⋯ button or an item) must not
+      // close it here: that fires before the item's click, so tearing the menu
+      // down on pointerdown unmounts the button and the click never lands — the
+      // items would silently do nothing. Let those handlers run; close only on
+      // a tap that lands outside.
+      if (event.target instanceof Element && event.target.closest(".song-menu-wrap")) return;
+      setMenuFor(null);
+    }
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+    };
+  }, [menuFor]);
+
+  function startRename(song: Song) {
+    setMenuFor(null);
+    setRenamingId(song.id);
+    setRenameValue(song.title);
+    setError(null);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue("");
+  }
+
+  async function submitRename(song: Song) {
+    const title = renameValue.trim();
+    if (!title) return;
+    try {
+      const updated = await renameSong(song.id, title);
+      setSongs((current) =>
+        (current ?? []).map((s) => (s.id === song.id ? { ...s, title: updated.title } : s)),
+      );
+      cancelRename();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleDelete(song: Song) {
+    setMenuFor(null);
+    const displayTitle = song.title || "Untitled song";
+    const pages = song.scan_count;
+    const warning =
+      pages === 0
+        ? `Delete "${displayTitle}"?`
+        : `Delete "${displayTitle}" and its ${pages} ${pages === 1 ? "page" : "pages"}? ` +
+          "The original photos are removed too.";
+    if (!window.confirm(warning)) return;
+    try {
+      await deleteSong(song.id);
+      setSongs((current) => (current ?? []).filter((s) => s.id !== song.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   function selectFile(files: FileList | null) {
     const file = files?.[0];
@@ -122,28 +199,145 @@ export function SongsPage() {
       )}
 
       <ul className="song-list">
-        {songs?.map((song) => (
-          <li key={song.id}>
-            <Link className="song-row" to={`/songs/${song.id}`}>
-              {song.cover_scan_id ? (
-                <img
-                  className="song-cover"
-                  src={scanThumbnailUrl(song.cover_scan_id)}
-                  alt=""
-                  loading="lazy"
-                />
+        {songs?.map((song) => {
+          // The cover appears in both states; in the normal row it is part of
+          // the <Link>, in the editing row it just sits alongside the field.
+          const cover = song.cover_scan_id ? (
+            <img
+              className="song-cover"
+              src={scanThumbnailUrl(song.cover_scan_id)}
+              alt=""
+              loading="lazy"
+            />
+          ) : (
+            <span className="song-cover placeholder" aria-hidden="true">
+              ♪
+            </span>
+          );
+
+          // Draft outranks New: a draft page is more actionable than an
+          // untranscribed one. A fully reviewed song shows no pill. Reuses the
+          // editor's .status-pill vocabulary for a consistent look.
+          const statusPill =
+            song.status === "draft" ? (
+              <span className="status-pill draft">Draft</span>
+            ) : song.status === "new" ? (
+              <span className="status-pill new">New</span>
+            ) : null;
+
+          return (
+            <li key={song.id} className="song-card">
+              {renamingId === song.id ? (
+                // A non-link row so the field can take the title's place — an
+                // <input> cannot live inside the navigating <Link>. Save/Cancel
+                // wrap below on a narrow card, growing it until the edit ends.
+                <div className="song-row song-row-editing">
+                  {cover}
+                  <form
+                    className="song-rename"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void submitRename(song);
+                    }}
+                  >
+                    <label className="sr-only" htmlFor={`rename-${song.id}`}>
+                      Song name
+                    </label>
+                    <input
+                      id={`rename-${song.id}`}
+                      type="text"
+                      autoFocus
+                      maxLength={200}
+                      value={renameValue}
+                      placeholder="Song name"
+                      onChange={(event) => setRenameValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") cancelRename();
+                      }}
+                    />
+                    <div className="song-rename-actions">
+                      <button className="primary" type="submit" disabled={!renameValue.trim()}>
+                        Save
+                      </button>
+                      <button type="button" onClick={cancelRename}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
               ) : (
-                <span className="song-cover placeholder" aria-hidden="true">
-                  ♪
-                </span>
+                <Link className="song-row" to={`/songs/${song.id}`}>
+                  {cover}
+                  <span className="song-heading">
+                    <span className="song-title">{song.title || "Untitled song"}</span>
+                    {statusPill}
+                  </span>
+                  <span className="muted">
+                    {song.scan_count} {song.scan_count === 1 ? "page" : "pages"}
+                  </span>
+                </Link>
               )}
-              <span className="song-title">{song.title || "Untitled song"}</span>
-              <span className="muted">
-                {song.scan_count} {song.scan_count === 1 ? "page" : "pages"}
-              </span>
-            </Link>
-          </li>
-        ))}
+
+              <div className="song-menu-wrap">
+                <button
+                  type="button"
+                  className="song-menu-button"
+                  aria-label={`Actions for ${song.title || "Untitled song"}`}
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === song.id}
+                  onClick={() => setMenuFor(menuFor === song.id ? null : song.id)}
+                >
+                  ⋯
+                </button>
+
+                {menuFor === song.id && (
+                  <div className="song-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => startRename(song)}>
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      // Greyed out until something has actually been transcribed.
+                      disabled={song.digital_page_no === null}
+                      title={
+                        song.digital_page_no === null
+                          ? "No digital version yet — transcribe a page first"
+                          : undefined
+                      }
+                      onClick={() => {
+                        setMenuFor(null);
+                        navigate(`/songs/${song.id}/pages/${song.digital_page_no}`);
+                      }}
+                    >
+                      Open digital version
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={song.scan_count === 0}
+                      title={song.scan_count === 0 ? "Add a page first" : undefined}
+                      onClick={() => {
+                        setMenuFor(null);
+                        navigate(`/songs/${song.id}/pages/${song.digital_page_no ?? 1}/edit`);
+                      }}
+                    >
+                      Edit digital version
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="danger-item"
+                      onClick={() => void handleDelete(song)}
+                    >
+                      Delete song
+                    </button>
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

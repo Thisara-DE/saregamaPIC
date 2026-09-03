@@ -1,14 +1,16 @@
 """End-to-end API tests against a temp data dir (real SQLite, real files)."""
 
 import io
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageDraw
 
+from app import db
 from app.config import Settings
 from app.main import create_app
-from app.storage import preview_path, thumbnail_path
+from app.storage import data_dir_is_ephemeral, preview_path, thumbnail_path
 
 
 def _valid_png() -> bytes:
@@ -72,6 +74,36 @@ def test_compiled_frontend_and_spa_fallback(tmp_path):
         assert "javascript" in c.get("/app.js").headers["content-type"]
         assert c.get("/missing.js").status_code == 404
         assert c.get("/api/not-a-route").status_code == 404
+
+
+def test_static_assets_skip_db_connection(tmp_path, monkeypatch):
+    """Finding 4: the SPA shell and its assets must not open a SQLite connection
+    (nor, with auth on, run a session SELECT); only /api/* pays for the DB."""
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text("<h1>SaReGaMaPic</h1>", encoding="utf-8")
+    (web_dir / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    settings = Settings(data_dir=tmp_path / "data", web_dir=web_dir)
+
+    with TestClient(create_app(settings)) as c:
+        # Count only request-time connections — startup migration already ran.
+        connects = 0
+        real_connect = db.connect
+
+        def counting_connect(path):
+            nonlocal connects
+            connects += 1
+            return real_connect(path)
+
+        monkeypatch.setattr(db, "connect", counting_connect)
+
+        assert c.get("/").status_code == 200
+        assert c.get("/app.js").status_code == 200
+        assert c.get("/songs/abc/pages/1").status_code == 200  # SPA fallback
+        assert connects == 0
+
+        assert c.get("/api/health").status_code == 200
+        assert connects == 1  # one /api request, exactly one connection
 
 
 def test_song_crud_and_scan_roundtrip(client, settings):
@@ -314,6 +346,47 @@ def test_preview_downscales_and_leaves_original_untouched(client, settings):
     assert client.get("/api/scans/nope/preview").status_code == 404
 
 
+def _jpeg_with_bars(width: int, height: int, bars: list[tuple[int, int]]) -> bytes:
+    """A white JPEG with black full-width bars, for line-band detection."""
+    im = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(im)
+    for top, bottom in bars:
+        draw.rectangle([0, top, width - 1, bottom - 1], fill="black")
+    buf = io.BytesIO()
+    im.save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_line_bands_detected_from_preview(client):
+    song_id = client.post("/api/songs", json={"title": "Bands"}).json()["id"]
+    # three well-separated rows on a portrait sheet
+    bars = [(200, 260), (700, 760), (1200, 1260)]
+    scan = _upload(client, song_id, _jpeg_with_bars(1000, 1500, bars))
+
+    r = client.get(f"/api/scans/{scan['id']}/line-bands")
+    assert r.status_code == 200
+    bands = r.json()["bands"]
+    assert len(bands) == 3
+    # normalized, ordered top-to-bottom, non-overlapping, roughly on each bar
+    centres = [(b["y0"] + b["y1"]) / 2 for b in bands]
+    assert centres == sorted(centres)
+    assert all(0.0 <= b["y0"] < b["y1"] <= 1.0 for b in bands)
+    assert abs(centres[0] - 200 / 1500) < 0.03
+    assert abs(centres[2] - 1230 / 1500) < 0.03
+
+
+def test_line_bands_blank_page_is_empty_not_an_error(client):
+    song_id = client.post("/api/songs", json={"title": "Blank"}).json()["id"]
+    scan = _upload(client, song_id, _jpeg_bytes(1000, 1400))
+    r = client.get(f"/api/scans/{scan['id']}/line-bands")
+    assert r.status_code == 200
+    assert r.json()["bands"] == []
+
+
+def test_line_bands_unknown_scan_404(client):
+    assert client.get("/api/scans/nope/line-bands").status_code == 404
+
+
 def test_delete_scan_renumbers_and_removes_files(client, settings):
     song_id = client.post("/api/songs", json={"title": "Del scan"}).json()["id"]
     scans = [_upload(client, song_id, _jpeg_bytes(40, 40)) for _ in range(3)]
@@ -353,3 +426,128 @@ def test_cover_scan_id(client):
     _upload(client, song_id, _jpeg_bytes(40, 40))
     listed = client.get("/api/songs").json()
     assert next(s for s in listed if s["id"] == song_id)["cover_scan_id"] == first["id"]
+
+
+def _page_file() -> dict:
+    return {"file": ("page.png", io.BytesIO(PNG_1PX), "image/png")}
+
+
+def test_rename_song_sets_a_title_recognition_left_blank(client):
+    """A song recognition never named had no way back to a real name — that is
+    the gap this closes, so start from a blank title."""
+    song = client.post("/api/songs/import", data={"title": ""}, files=_page_file()).json()["song"]
+    assert song["title"] == ""
+
+    renamed = client.patch(f"/api/songs/{song['id']}", json={"title": "  Tharuda Nidana  "})
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Tharuda Nidana"  # surrounding space trimmed
+    assert client.get(f"/api/songs/{song['id']}").json()["title"] == "Tharuda Nidana"
+
+    # Blank or whitespace-only would strand the song again.
+    assert client.patch(f"/api/songs/{song['id']}", json={"title": "   "}).status_code == 422
+    assert client.patch(f"/api/songs/{song['id']}", json={"title": ""}).status_code == 422
+    assert client.get(f"/api/songs/{song['id']}").json()["title"] == "Tharuda Nidana"
+    assert client.patch("/api/songs/missing", json={"title": "X"}).status_code == 404
+
+
+def test_song_reports_the_first_page_holding_a_digital_version(client):
+    """The gallery greys out 'digital version' from this field alone, so it must
+    be absent until a transcription exists and then point at the right page."""
+    created = client.post(
+        "/api/songs/import", data={"title": "Two pages"}, files=_page_file()
+    ).json()
+    song_id = created["song"]["id"]
+    client.post(f"/api/songs/{song_id}/scans", files=_page_file())
+
+    assert client.get(f"/api/songs/{song_id}").json()["digital_page_no"] is None
+
+    pages = client.get(f"/api/songs/{song_id}").json()["scans"]
+    second = next(s for s in pages if s["page_no"] == 2)
+    client.put(
+        f"/api/scans/{second['id']}/transcription",
+        json={"stf": {"header": {}, "lines": []}, "status": "draft"},
+    )
+    assert client.get(f"/api/songs/{song_id}").json()["digital_page_no"] == 2
+    assert [s for s in client.get("/api/songs").json() if s["id"] == song_id][0][
+        "digital_page_no"
+    ] == 2
+
+
+def test_song_status_tracks_draft_and_reviewed_pages(client):
+    """The gallery pill is driven by this field, precedence draft > new >
+    reviewed: 'draft' while any page is a draft (even beside reviewed pages),
+    'new' while any page is still un-recognized, and 'reviewed' — the no-pill
+    state — only once every page is reviewed."""
+    created = client.post(
+        "/api/songs/import", data={"title": "Two pages"}, files=_page_file()
+    ).json()
+    song_id = created["song"]["id"]
+    client.post(f"/api/songs/{song_id}/scans", files=_page_file())
+
+    def status() -> str:
+        return client.get(f"/api/songs/{song_id}").json()["status"]
+
+    # Nothing transcribed yet.
+    assert status() == "new"
+
+    pages = client.get(f"/api/songs/{song_id}").json()["scans"]
+    first = next(s for s in pages if s["page_no"] == 1)
+    second = next(s for s in pages if s["page_no"] == 2)
+
+    def scan_status() -> dict[int, str]:
+        detail = client.get(f"/api/songs/{song_id}").json()
+        return {s["page_no"]: s["status"] for s in detail["scans"]}
+
+    # Both pages start un-recognized.
+    assert scan_status() == {1: "new", 2: "new"}
+
+    # A draft on one page flips the whole song to 'draft'.
+    body = {"stf": {"header": {}, "lines": []}, "status": "draft"}
+    client.put(f"/api/scans/{first['id']}/transcription", json=body)
+    assert status() == "draft"
+
+    # Reviewing that page while the other is still un-recognized stays 'new':
+    # an un-recognized page must not hide behind a reviewed sibling, so that a
+    # song with no pill strictly means every page is reviewed.
+    client.put(
+        f"/api/scans/{first['id']}/transcription",
+        json={"stf": {"header": {}, "lines": []}, "status": "reviewed"},
+    )
+    assert status() == "new"
+    assert scan_status() == {1: "reviewed", 2: "new"}
+
+    # A draft anywhere outranks both a reviewed and an un-recognized sibling.
+    client.put(f"/api/scans/{second['id']}/transcription", json=body)
+    assert status() == "draft"
+    # The detail page pinpoints WHICH page is the draft vs the reviewed one.
+    assert scan_status() == {1: "reviewed", 2: "draft"}
+
+    # Every page reviewed → the pill disappears.
+    client.put(
+        f"/api/scans/{second['id']}/transcription",
+        json={"stf": {"header": {}, "lines": []}, "status": "reviewed"},
+    )
+    assert status() == "reviewed"
+    assert [s for s in client.get("/api/songs").json() if s["id"] == song_id][0][
+        "status"
+    ] == "reviewed"
+
+
+def test_ephemeral_data_dir_is_detected_only_for_the_container_path(tmp_path):
+    """Deploys wipe an unmounted /data silently — the app boots fine and simply
+    has no songs, scans, or sessions. This is the only signal there is."""
+    # A local checkout keeps data/ inside the repo on the root device; that is
+    # normal and must never warn.
+    assert data_dir_is_ephemeral(tmp_path) is False
+
+    # Standing in for the deployed path: same device as root = nothing mounted.
+    unmounted = tmp_path / "data"
+    unmounted.mkdir()
+    assert (
+        data_dir_is_ephemeral(unmounted, container_dir=unmounted, root=tmp_path) is True
+    )
+
+    # A missing container path must not raise on the way to a boolean.
+    assert data_dir_is_ephemeral(
+        Path("/definitely-not-here"), container_dir=Path("/definitely-not-here")
+    ) is False

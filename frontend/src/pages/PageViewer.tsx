@@ -1,7 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ApiError, deleteScan, getSong, getTranscription, scanImageUrl } from "../api/client";
+import {
+  ApiError,
+  deleteScan,
+  getSong,
+  getTranscription,
+  scanImageUrl,
+  scanPreviewUrl,
+} from "../api/client";
+import { OfflineBanner } from "../components/OfflineBanner";
+import { ProgressiveImage } from "../components/ProgressiveImage";
 import { StfLineText } from "../components/StfLineText";
+import { readPref, writePref } from "../prefs";
+import { NOTE_KINDS } from "../stfGrammar";
 import {
   pitchClassName,
   scalePitchClass,
@@ -15,6 +26,34 @@ type View = "original" | "digital";
 // Non-breaking space — pads the two-name Key options so the columns line up in
 // the monospace <select> (regular spaces collapse in option rendering).
 const NBSP = " ";
+
+// Reading preferences (text size, theme) survive page changes and app restarts —
+// see the notes on each below, and prefs.ts for why every access is guarded.
+
+// Digital-view text size. This is the read-while-playing view at music-stand
+// distance, so the chosen size is a per-user constant (not per-page). Discrete
+// multipliers keep the stepping predictable and the % labels clean; 1 (= 100%)
+// is always a member.
+const DIGITAL_SCALES: readonly number[] = [0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const MIN_DIGITAL_SCALE = DIGITAL_SCALES[0] ?? 1;
+const MAX_DIGITAL_SCALE = DIGITAL_SCALES[DIGITAL_SCALES.length - 1] ?? 1;
+const SCALE_KEY = "saregamapic.digitalScale";
+
+function loadDigitalScale(): number {
+  const stored = Number(readPref(SCALE_KEY));
+  return DIGITAL_SCALES.includes(stored) ? stored : 1;
+}
+
+// Viewer theme. Night (light-on-black) is the default — that is how the viewer
+// has always looked and it suits the photo. Day is the paper-like inverse for
+// reading the digital render in a bright room or daylight, where light-on-black
+// glares. Like the text size it is a per-user reading constant, not per-page.
+type Theme = "night" | "day";
+const THEME_KEY = "saregamapic.viewerTheme";
+
+function loadTheme(): Theme {
+  return readPref(THEME_KEY) === "day" ? "day" : "night";
+}
 
 /**
  * Full-screen viewer for one page. Toggles between the ORIGINAL photo (fidelity
@@ -36,6 +75,11 @@ export function PageViewer() {
   // Key selector auto-picks the nearest octave; this shifts the whole line
   // up/down from there for register preference. Reset whenever the key changes.
   const [octaveShift, setOctaveShift] = useState(0);
+  // Digital text size multiplier (persisted; see DIGITAL_SCALES) and viewer
+  // theme (persisted; see Theme). Unlike the key and octave, neither is reset
+  // per page — they are reading preferences, not per-sheet performance choices.
+  const [digitalScale, setDigitalScale] = useState(loadDigitalScale);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
 
   const page = Number(pageNo);
   const scans = useMemo(() => song?.scans ?? [], [song]);
@@ -58,7 +102,13 @@ export function PageViewer() {
     let cancelled = false;
     getTranscription(scan.id)
       .then((t) => {
-        if (!cancelled) setTranscription(t);
+        if (cancelled) return;
+        setTranscription(t);
+        // Open on the digital version when there is one to show — that is what
+        // the page is usually opened for. An empty transcription would be a
+        // blank screen, so fall back to the photo. The toggle only renders once
+        // this resolves, so this can never overwrite a user's choice.
+        if (t.stf.lines.length > 0) setView("digital");
       })
       .catch((e: unknown) => {
         // 404 = nothing transcribed yet; leave Digital disabled, surface others.
@@ -99,6 +149,24 @@ export function PageViewer() {
     }
   }
 
+  // Step the digital text size one notch and persist it. Bounds are enforced by
+  // clamping the index into DIGITAL_SCALES; the buttons also disable at the ends.
+  // Both handlers persist outside the state updater — updaters must stay pure
+  // (React double-invokes them in StrictMode).
+  function stepDigitalScale(dir: 1 | -1) {
+    const i = DIGITAL_SCALES.indexOf(digitalScale);
+    const clamped = Math.min(DIGITAL_SCALES.length - 1, Math.max(0, i + dir));
+    const next = DIGITAL_SCALES[clamped] ?? digitalScale;
+    setDigitalScale(next);
+    writePref(SCALE_KEY, String(next));
+  }
+
+  function toggleTheme() {
+    const next: Theme = theme === "day" ? "night" : "day";
+    setTheme(next);
+    writePref(THEME_KEY, next);
+  }
+
   const stf = transcription?.stf;
   // The stored (original) scale, from the header's concert name. Null when the
   // header has no parseable scale — then transposition is unavailable.
@@ -120,7 +188,8 @@ export function PageViewer() {
     !keyChanged || sourcePc === null ? stf?.header.alto_scale : pitchClassName(targetPc! + 9);
 
   return (
-    <div className="viewer">
+    <div className={`viewer theme-${theme}`}>
+      <OfflineBanner />
       <div className="viewer-bar">
         <button className="viewer-btn" onClick={() => navigate(`/songs/${songId}`)}>
           ✕
@@ -146,6 +215,20 @@ export function PageViewer() {
             </button>
           </div>
         )}
+        {/* Theme toggle. One button, constant meaning: "day theme" —
+            aria-pressed carries the state, so the icon does not have to flip.
+            It sits in the bar rather than with the other reading preference
+            (text size) because the theme repaints the whole viewer, including
+            pages that have no transcription and so render no controls row. */}
+        <button
+          className={`viewer-btn theme-btn${theme === "day" ? " on" : ""}`}
+          onClick={toggleTheme}
+          aria-pressed={theme === "day"}
+          aria-label="Day theme"
+          title="Day theme — dark notes on paper, for bright rooms"
+        >
+          ☀
+        </button>
         <button
           className="viewer-btn"
           aria-label="Transcribe page"
@@ -249,6 +332,33 @@ export function PageViewer() {
               Reset
             </button>
           )}
+          {/* Text size — pushed to the right so it stays put as the key/octave
+              controls appear and disappear. Reading size at music-stand
+              distance. The theme toggle, the other reading preference, lives in
+              the bar instead; see the comment there. */}
+          <span className="text-size" role="group" aria-label="Text size">
+            <button
+              className="viewer-btn size-btn"
+              onClick={() => stepDigitalScale(-1)}
+              disabled={digitalScale <= MIN_DIGITAL_SCALE}
+              aria-label="Smaller text"
+              title="Smaller text"
+            >
+              A−
+            </button>
+            <span className="size-value" aria-live="polite">
+              {Math.round(digitalScale * 100)}%
+            </span>
+            <button
+              className="viewer-btn size-btn"
+              onClick={() => stepDigitalScale(1)}
+              disabled={digitalScale >= MAX_DIGITAL_SCALE}
+              aria-label="Larger text"
+              title="Larger text"
+            >
+              A+
+            </button>
+          </span>
         </div>
       )}
 
@@ -259,8 +369,13 @@ export function PageViewer() {
 
       {scan && view === "original" && (
         <div className="viewer-stage">
-          <img
-            src={scanImageUrl(scan.id)}
+          {/* Paint the 1600px preview first, then swap in the full-res original
+              when it loads (#15) — the stored 4000×3000 scan is a multi-second
+              blank over cellular. */}
+          <ProgressiveImage
+            key={scan.id}
+            preview={scanPreviewUrl(scan.id)}
+            full={scanImageUrl(scan.id)}
             alt={`Page ${page} of ${song?.title || "Untitled song"}`}
           />
         </div>
@@ -268,7 +383,10 @@ export function PageViewer() {
 
       {scan && view === "digital" && stf && (
         <div className="viewer-stage digital">
-          <div className="viewer-digital">
+          <div
+            className="viewer-digital"
+            style={{ "--digital-scale": digitalScale } as CSSProperties}
+          >
             {(shownConcert || shownAlto || stf.header.beat) && (
               <div className="digital-header">
                 {shownConcert && <span>Concert {shownConcert}</span>}
@@ -319,7 +437,3 @@ export function PageViewer() {
     </div>
   );
 }
-
-// Note-bearing line kinds get the faithful arc/mark render; the rest are free
-// text (mirrors backend _NOTE_KINDS + the editor's NOTE_KINDS).
-const NOTE_KINDS = new Set(["sargam", "run"]);
