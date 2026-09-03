@@ -366,6 +366,14 @@ describe("EditorPage photo pane", () => {
     expect(zoomOut).toBeDisabled();
   });
 
+  // F7 (phantom pointer after the pane collapses mid-gesture) is deliberately
+  // NOT unit-tested: jsdom's synthetic pointer events don't carry distinct
+  // pointerIds, so the two-finger state that triggers the bug can't be
+  // reproduced and any such test would pass regardless of the fix. The fix
+  // (clearing the gesture accumulators on pane-close / page-change, plus a
+  // lostpointercapture handler) is verified by inspection and owed a tablet
+  // check, folded into the pinch/zoom exit-criterion task.
+
   it("fetches the sheet's line bands on load and survives a line focus", async () => {
     // The pan maths itself is unit-tested (photoZoom/lineBands); jsdom has no
     // layout to scroll, so here we only prove the wiring: the bands endpoint is

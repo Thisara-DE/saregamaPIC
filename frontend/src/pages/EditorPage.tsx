@@ -181,13 +181,34 @@ export function EditorPage() {
     return { x: e.clientX - (box?.left ?? 0), y: e.clientY - (box?.top ?? 0) };
   }
 
+  // Clear any gesture the pane's own pointerup/cancel would normally clear, so a
+  // pointer that never lifted on the pane can't linger and turn the next drag
+  // into a pinch (F7). The pane can vanish mid-gesture two ways: (a) the 🖼
+  // toggle collapses it — it lives in the always-present bar precisely so it is
+  // reachable with a finger still down; (b) a page change keeps this component
+  // mounted (same route, new params) but swaps the sheet. lostpointercapture
+  // handles (c), a release outside the pane. Both refs and both effects below
+  // keep the accumulators honest.
+  function clearGesture() {
+    pointers.current.clear();
+    pinchSpread.current = null;
+    moved.current = false;
+  }
+
   // A new page means a new sheet; start it fitted rather than wherever the last
-  // one was left zoomed.
+  // one was left zoomed, and drop any pointer tracked from the previous page.
   useEffect(() => {
     zoomRef.current = IDENTITY;
     setZoom(IDENTITY);
     setPannable(false);
+    clearGesture();
   }, [scanId]);
+
+  // Collapsing the pane unmounts it mid-gesture, so its pointerup never fires;
+  // clear the accumulators when it closes.
+  useEffect(() => {
+    if (!photoOpen) clearGesture();
+  }, [photoOpen]);
 
   // The sheet's detected ink rows, for the per-line auto-scroll. A pure function
   // of the scan image (computed server-side, nothing stored), so fetched once per
@@ -215,7 +236,15 @@ export function EditorPage() {
   // that's already on screen exactly where it is (no jump between adjacent lines).
   function scrollToLine(i: number) {
     if (!photoOpen) return;
-    const band = bandForLine(bands, i, stf.lines.length);
+    // The detector counts the written title and header rows as ink rows, but
+    // neither is an STF line — they sit above the first sargam row. Tell
+    // bandForLine how many such rows to skip so line 0 scrolls to the first
+    // written line, not the title above it (F6). Over-estimating is safe.
+    const h = stf.header;
+    const topExtra =
+      (title.trim() ? 1 : 0) +
+      (h.concert_scale.trim() || h.alto_scale.trim() || h.beat.trim() ? 1 : 0);
+    const band = bandForLine(bands, i, stf.lines.length, topExtra);
     if (band) applyZoom(bandIntoView(zoomRef.current, band.y0, band.y1, readFit()));
   }
 
@@ -237,7 +266,11 @@ export function EditorPage() {
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
-      /* capture is an optimisation — the gesture still works without it */
+      // Capture is an optimisation for the gesture itself — panning works
+      // without it — but its CLEANUP is not optional: without capture, a release
+      // outside the pane delivers neither pointerup nor lostpointercapture here,
+      // so this pointer would linger (F7). The pane-close / page-change resets
+      // above are the backstop for that rare path.
     }
     pointers.current.set(e.pointerId, panePoint(e));
     moved.current = false;
@@ -297,6 +330,14 @@ export function EditorPage() {
       return;
     }
     lastTap.current = { ...point, at };
+  }
+
+  // Capture is lost when the pointer goes up outside the pane (or the browser
+  // revokes it). The pane's own pointerup then never arrives, so treat this as a
+  // release — drop the pointer instead of leaving it as a phantom finger (F7).
+  function handleLostCapture(e: ReactPointerEvent<HTMLDivElement>) {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinchSpread.current = null;
   }
 
   const apply = useCallback((t: Transcription) => {
@@ -608,6 +649,7 @@ export function EditorPage() {
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
+            onLostPointerCapture={handleLostCapture}
           >
             {scanId && (
               <img
