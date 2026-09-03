@@ -3,7 +3,7 @@
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, UploadFile
 
 from ..auth import current_user_id
 from ..schemas import Scan, Song, SongCreate, SongDetail, SongImport, SongUpdate
@@ -20,6 +20,9 @@ router = APIRouter()
 
 MAX_IMAGE_BYTES = 30 * 1024 * 1024  # generous for high-res phone photos
 
+# Upper bound on a single /api/songs page when the caller opts into pagination.
+_SONG_PAGE_MAX = 500
+
 # cover_scan_id = first page, so the gallery can show a thumbnail per song.
 # digital_page_no = lowest page that has a transcription, so the gallery can link
 # straight to the digital view (and grey the link out) without a request per page.
@@ -31,7 +34,11 @@ MAX_IMAGE_BYTES = 30 * 1024 * 1024  # generous for high-res phone photos
 #                pages still surfaces as New rather than masquerading as done
 #   'reviewed' — every page has a transcription and none is a draft (no pill)
 _SONG_SELECT = (
-    "SELECT s.*,"
+    # Explicit columns, not s.*: the Song response model needs exactly these four
+    # base fields plus the computed ones below. owner_id (used only in the WHERE
+    # ownership gate) is deliberately not selected, and adding a column to the
+    # table no longer silently changes this endpoint's output.
+    "SELECT s.id, s.title, s.notes, s.created_at,"
     " (SELECT COUNT(*) FROM scans WHERE song_id = s.id) AS scan_count,"
     " (SELECT id FROM scans WHERE song_id = s.id ORDER BY page_no LIMIT 1) AS cover_scan_id,"
     " (SELECT sc.page_no FROM scans sc JOIN transcriptions t ON t.scan_id = sc.id"
@@ -159,11 +166,25 @@ async def import_song(
 
 
 @router.get("/songs", response_model=list[Song])
-def list_songs(request: Request) -> list[Song]:
-    rows = _db(request).execute(
-        f"{_SONG_SELECT} WHERE s.owner_id = ? ORDER BY s.created_at DESC",
-        (current_user_id(request),),
-    ).fetchall()
+def list_songs(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=_SONG_PAGE_MAX),
+    offset: int = Query(default=0, ge=0),
+) -> list[Song]:
+    """The owner's songs, newest first.
+
+    Pagination is opt-in: with no ``limit`` the full library is returned, which
+    keeps the gallery's fetch-all behaviour and means a song can never be
+    silently hidden at this (single-user) scale. ``limit``/``offset`` give a
+    future paged UI a bounded, capped path in without a contract change — the
+    same drop-in-for-scaling shape as the retention windows.
+    """
+    sql = f"{_SONG_SELECT} WHERE s.owner_id = ? ORDER BY s.created_at DESC"
+    params: list[object] = [current_user_id(request)]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = _db(request).execute(sql, params).fetchall()
     return [Song(**dict(r)) for r in rows]
 
 
@@ -239,12 +260,20 @@ async def upload_scan(song_id: str, file: UploadFile, request: Request) -> Scan:
     image_path = save_scan_image(
         request.app.state.settings.images_dir, song_id, scan_id, content_type, data
     )
-    conn.execute(
-        "INSERT INTO scans (id, song_id, page_no, image_path, content_type)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (scan_id, song_id, next_page, image_path, content_type),
-    )
-    conn.commit()
+    # The image is on disk before the row exists, so a failed INSERT/commit would
+    # orphan the file (no row will ever reference it). Mirror import_song: on any
+    # DB error, roll back and delete the just-written file before re-raising.
+    try:
+        conn.execute(
+            "INSERT INTO scans (id, song_id, page_no, image_path, content_type)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (scan_id, song_id, next_page, image_path, content_type),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        delete_scan_files(request.app.state.settings.data_dir, image_path, scan_id)
+        raise
     row = conn.execute(
         "SELECT id, song_id, page_no, content_type, uploaded_at FROM scans WHERE id = ?",
         (scan_id,),

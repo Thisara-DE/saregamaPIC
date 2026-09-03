@@ -1,6 +1,7 @@
 """End-to-end API tests against a temp data dir (real SQLite, real files)."""
 
 import io
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from PIL import Image, ImageDraw
 from app import db
 from app.config import Settings
 from app.main import create_app
+from app.routers.songs import _SONG_PAGE_MAX
 from app.storage import data_dir_is_ephemeral, preview_path, thumbnail_path
 
 
@@ -179,6 +181,62 @@ def test_upload_first_import_does_not_create_song_for_invalid_image(client):
     )
     assert r.status_code == 415
     assert client.get("/api/songs").json() == before
+
+
+def test_upload_scan_removes_orphan_file_when_insert_fails(client, settings, monkeypatch):
+    """A DB failure after the image is written must not orphan the file on disk.
+
+    The image lands before the scans row exists, so upload_scan mirrors
+    import_song: roll back and delete the just-written file. Force the scans
+    INSERT to fail by wrapping the request's connection (sqlite3.Connection is an
+    immutable C type, so it's patched at db.connect, not on the instance).
+    """
+    song_id = client.post("/api/songs", json={"title": "Orphan"}).json()["id"]
+    real_connect = db.connect
+
+    class _FailScanInsert:
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        def execute(self, sql: str, *args: object, **kwargs: object):
+            if sql.lstrip().startswith("INSERT INTO scans"):
+                raise sqlite3.OperationalError("forced INSERT failure")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name: str):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(db, "connect", lambda path: _FailScanInsert(real_connect(path)))
+
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(
+            f"/api/songs/{song_id}/scans",
+            files={"file": ("page1.png", io.BytesIO(PNG_1PX), "image/png")},
+        )
+
+    monkeypatch.undo()
+    # No image left behind, and no scan row was created.
+    assert list((settings.images_dir / song_id).glob("*.png")) == []
+    assert client.get(f"/api/songs/{song_id}").json()["scan_count"] == 0
+
+
+def test_list_songs_pagination(client):
+    ids = {
+        client.post("/api/songs", json={"title": f"S{i}"}).json()["id"] for i in range(3)
+    }
+    # Default: the whole library, no pagination — a song can't be hidden.
+    assert len(client.get("/api/songs").json()) == 3
+    # limit + offset partition the library into disjoint pages covering all of it.
+    page1 = client.get("/api/songs?limit=2").json()
+    page2 = client.get("/api/songs?limit=2&offset=2").json()
+    assert len(page1) == 2 and len(page2) == 1
+    p1, p2 = {s["id"] for s in page1}, {s["id"] for s in page2}
+    assert p1.isdisjoint(p2)
+    assert p1 | p2 == ids
+    # Bounds are enforced (422, not a silent clamp).
+    assert client.get("/api/songs?limit=0").status_code == 422
+    assert client.get(f"/api/songs?limit={_SONG_PAGE_MAX + 1}").status_code == 422
+    assert client.get("/api/songs?offset=-1").status_code == 422
 
 
 def test_upload_rejections(client):

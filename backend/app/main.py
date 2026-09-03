@@ -1,6 +1,7 @@
 """App factory."""
 
 import logging
+import secrets
 import sqlite3
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -99,7 +100,13 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     app.state.oauth = configure_oauth(settings)
     app.add_middleware(
         SessionMiddleware,
-        secret_key=settings.oauth_state_secret or "local-development-only",
+        # This key signs the short-lived OAuth-state cookie during login. When
+        # auth is on, validate_auth() guarantees oauth_state_secret is set (and a
+        # deploy runs a single worker per process anyway); when auth is off the
+        # login flow never runs, so the cookie is never issued. A fresh random
+        # key per process is therefore correct in dev and avoids shipping a known
+        # literal secret in source (the alternative a scanner rightly flags).
+        secret_key=settings.oauth_state_secret or secrets.token_urlsafe(32),
         session_cookie="srg_oauth",
         max_age=600,
         same_site="lax",
