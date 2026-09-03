@@ -18,6 +18,7 @@ import {
   scanPreviewUrl,
 } from "../api/client";
 import { StfLineText } from "../components/StfLineText";
+import { useFocusTrap } from "../focusTrap";
 import { bandForLine, type Band } from "../lineBands";
 import {
   bandIntoView,
@@ -362,6 +363,10 @@ export function EditorPage() {
       dirty && currentLocation.pathname !== nextLocation.pathname,
   );
   const leaving = blocker.state === "blocked";
+  // Focus management for the unsaved-changes modal (finding #17): move focus in
+  // while it is open, trap Tab inside it, and restore focus on close.
+  const leaveDialog = useRef<HTMLDivElement>(null);
+  useFocusTrap(leaveDialog, leaving);
 
   useEffect(() => {
     let cancelled = false;
@@ -903,11 +908,15 @@ export function EditorPage() {
           onClick={() => !busy && blocker.reset?.()}
         >
           <div
+            ref={leaveDialog}
             className="modal-card"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="leave-title"
             aria-describedby="leave-body"
+            // tabIndex -1 lets useFocusTrap move focus onto the card itself on
+            // open (so Escape below is heard) without adding it to the Tab order.
+            tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === "Escape" && !busy) blocker.reset?.();

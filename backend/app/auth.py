@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from .config import Settings
+from .schemas import InviteIn, UserSummary
 from .security import client_ip, enforce_limit, security_event
 
 INITIAL_OWNER_ID = "00000000000000000000000000000001"
@@ -28,6 +30,12 @@ class CurrentUser(BaseModel):
     id: str
     email: str
     display_name: str
+    # The initial owner is the sole admin: the only principal that can invite
+    # others (finding #18). Kept as identity, not a role column — a single-admin
+    # personal app needs no more, and a future multi-admin model is a migration
+    # away. The frontend uses this only to show/hide the access UI; the endpoints
+    # enforce it independently via require_admin().
+    is_admin: bool
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,16 @@ def current_user_id(request: Request) -> str:
     user_id = getattr(request.state, "user_id", None)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    return user_id
+
+
+def require_admin(request: Request) -> str:
+    """Authorize an admin-only action. Admin = the initial owner. Returns the
+    admin's user id (so callers can log it) or raises 403."""
+    user_id = current_user_id(request)
+    if user_id != INITIAL_OWNER_ID:
+        security_event(request, "admin", "forbidden", user_id=user_id)
+        raise HTTPException(status_code=403, detail="Admin access required")
     return user_id
 
 
@@ -222,13 +240,57 @@ async def callback(request: Request) -> Response:
 
 @router.get("/me", response_model=CurrentUser)
 def me(request: Request) -> CurrentUser:
+    user_id = current_user_id(request)
     row = request.state.db.execute(
         "SELECT id, email, display_name FROM users WHERE id = ? AND status = 'active'",
-        (current_user_id(request),),
+        (user_id,),
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return CurrentUser(**dict(row))
+    return CurrentUser(**dict(row), is_admin=user_id == INITIAL_OWNER_ID)
+
+
+@router.get("/users", response_model=list[UserSummary])
+def list_users(request: Request) -> list[UserSummary]:
+    """The access list, admin-only: everyone in the allowlist and their status."""
+    require_admin(request)
+    rows = request.state.db.execute(
+        "SELECT id, email, display_name, status, created_at FROM users ORDER BY created_at, email"
+    ).fetchall()
+    return [UserSummary(**dict(row)) for row in rows]
+
+
+@router.post("/users", response_model=UserSummary, status_code=201)
+def invite_user(payload: InviteIn, request: Request) -> UserSummary:
+    """Admin adds an email to the invite allowlist (finding #18). The row starts
+    'invited'; the person can then sign in with Google, which flips it to
+    'active' and fills display_name from their verified profile."""
+    require_admin(request)
+    conn: sqlite3.Connection = request.state.db
+    existing = conn.execute(
+        "SELECT status FROM users WHERE email = ? COLLATE NOCASE", (payload.email,)
+    ).fetchone()
+    if existing is not None:
+        # Idempotency without silent surprises: report the current state rather
+        # than reset it (re-enabling a disabled account is a separate, more
+        # deliberate action than "invite").
+        raise HTTPException(
+            status_code=409,
+            detail=f"That email already has {existing['status']} access.",
+        )
+    user_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO users (id, email, status) VALUES (?, ?, 'invited')",
+        (user_id, payload.email),
+    )
+    conn.commit()
+    # Log the new user's id, never the email (security_event redacts emails).
+    security_event(request, "invite", "created", resource_id=user_id)
+    row = conn.execute(
+        "SELECT id, email, display_name, status, created_at FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    return UserSummary(**dict(row))
 
 
 @router.post("/logout", status_code=204)

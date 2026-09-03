@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   createRoutesFromElements,
+  Link,
   Navigate,
   Outlet,
   Route,
@@ -10,6 +11,9 @@ import {
 } from "react-router-dom";
 import { ApiError, getCurrentUser, logout } from "./api/client";
 import type { AuthUser } from "./api/types";
+import { OfflineBanner } from "./components/OfflineBanner";
+import { clearOfflineCaches } from "./offline";
+import { AdminPage } from "./pages/AdminPage";
 import { EditorPage } from "./pages/EditorPage";
 import { PageViewer } from "./pages/PageViewer";
 import { SongPage } from "./pages/SongPage";
@@ -19,18 +23,38 @@ import { SongsPage } from "./pages/SongsPage";
 // the Shell (and anything else that needs them) via the router's outlet context.
 type AppContext = { user: AuthUser; onSignedOut: () => void };
 
+// Shell hands the user down to its own routed pages (e.g. AdminPage, which
+// guards on is_admin). Exported so those pages can type useOutletContext.
+export type ShellContext = { user: AuthUser };
+
 // Routing arrived with Phase 1's third view (the page viewer). The viewer
 // renders outside the Shell so the photo gets the whole screen.
 function Shell() {
   const { user, onSignedOut } = useOutletContext<AppContext>();
 
   async function signOut() {
-    await logout();
-    onSignedOut();
+    // The local sign-out must happen regardless of the server call: logout()
+    // rejects when we are offline (fetch throws) or when the session already
+    // lapsed (401), and if that skipped the two lines below the button would
+    // look dead AND the cached identity, songs and images would stay on the
+    // device — the exact leak clearOfflineCaches exists to prevent, on the one
+    // path (offline / shared tablet) findings #16 and #18 made reachable. So
+    // swallow the error here: this is the one place where dropping it is the
+    // safe direction, because clearing local state needs no network. The
+    // server-side session is still revoked whenever the request does land.
+    try {
+      await logout();
+    } catch {
+      // offline, or the session was already gone — sign out locally anyway.
+    } finally {
+      await clearOfflineCaches();
+      onSignedOut();
+    }
   }
 
   return (
     <>
+      <OfflineBanner />
       <header className="app-header">
         <div>
           <h1>SaReGaMaPic</h1>
@@ -38,13 +62,20 @@ function Shell() {
         </div>
         <div className="account-menu">
           <span>{user.display_name || user.email}</span>
-          <button type="button" className="button-link" onClick={() => void signOut()}>
-            Sign out
-          </button>
+          <div className="account-links">
+            {user.is_admin && (
+              <Link className="button-link" to="/people">
+                Manage access
+              </Link>
+            )}
+            <button type="button" className="button-link" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
       <main>
-        <Outlet />
+        <Outlet context={{ user } satisfies ShellContext} />
       </main>
     </>
   );
@@ -158,6 +189,7 @@ export const routes = createRoutesFromElements(
     <Route element={<Shell />}>
       <Route path="/" element={<SongsPage />} />
       <Route path="/songs/:songId" element={<SongPage />} />
+      <Route path="/people" element={<AdminPage />} />
     </Route>
     <Route path="/songs/:songId/pages/:pageNo" element={<PageViewer />} />
     <Route path="/songs/:songId/pages/:pageNo/edit" element={<EditorPage />} />

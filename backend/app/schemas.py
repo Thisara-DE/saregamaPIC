@@ -13,6 +13,43 @@ from .stf import STF_LINE_KINDS
 # the two ever disagree.
 PageStatus = Literal["new", "draft", "reviewed"]  # gallery/song + per-page pill
 TranscriptionStatus = Literal["draft", "reviewed"]  # a transcription is one or the other
+# A user in the invite allowlist: "invited" (added, has not signed in yet),
+# "active" (has signed in), or "disabled" (access revoked). Mirrors the CHECK in
+# migration 003. Hand-mirrored in frontend/src/api/types.ts (drift-guarded).
+UserStatus = Literal["invited", "active", "disabled"]
+
+
+class UserSummary(BaseModel):
+    """A row in the access list shown to the admin (finding #18). No session,
+    identity, or token data — only who has been granted access and where they
+    are in the invited → active lifecycle."""
+
+    id: str
+    email: str
+    display_name: str
+    status: UserStatus
+    created_at: str
+
+
+class InviteIn(BaseModel):
+    """Admin adds an email to the allowlist. Only the email is accepted; the row
+    is always created as 'invited' server-side, and display_name is filled from
+    the verified Google profile on first sign-in — never trusted from here."""
+
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        email = value.strip().lower()
+        # Deliberately minimal: Google verifies the real address at sign-in, so
+        # this only rejects obvious non-emails, not every RFC edge case (which
+        # would need an extra dependency). One '@' with non-empty, dot-bearing
+        # halves and no spaces.
+        local, _, domain = email.partition("@")
+        if not local or "@" in domain or "." not in domain or any(c.isspace() for c in email):
+            raise ValueError("enter a valid email address")
+        return email
 
 
 class SongCreate(BaseModel):
