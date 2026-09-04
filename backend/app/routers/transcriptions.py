@@ -29,7 +29,11 @@ from ..stf import validate_stf
 from ._common import scan_row
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+# On the "saregamapic" tree, NOT __name__: configure_logging() attaches the only
+# real handler to "saregamapic" and sets propagate=False there, so a logger
+# under "app.*" would fall through to root's lastResort stderr fallback and
+# the traceback this logger exists to keep would be dropped in production (F29).
+logger = logging.getLogger("saregamapic.recognition")
 
 
 def _to_response(row: sqlite3.Row) -> Transcription:
