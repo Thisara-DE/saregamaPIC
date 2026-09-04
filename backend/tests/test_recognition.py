@@ -571,6 +571,69 @@ def test_failed_idempotent_recognition_replays_error_without_second_model_call(t
     assert run == ("failed", "invalid_json")
 
 
+def test_unexpected_recognizer_error_answers_like_its_replay(tmp_path):
+    """F28: the generic failure path must answer the first attempt exactly as the
+    idempotent replay answers — 503 + the mapped 'internal_error' text — not a
+    bare 500 first and a 503 on replay. The exception text stays out of the
+    response, and the traceback still reaches the server log.
+
+    The log check attaches a handler to the "saregamapic" logger that
+    configure_logging() owns — not pytest's caplog, which hooks the named logger
+    directly and so would pass even for a logger outside the configured tree
+    whose records are dropped in production (F29)."""
+    calls = 0
+
+    def broken(_data, _ct):
+        nonlocal calls
+        calls += 1
+        raise ValueError("payload was a list, not an object")
+
+    class _Capture(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    settings = Settings(data_dir=tmp_path / "data")
+    tree = logging.getLogger("saregamapic")
+    capture = _Capture()
+    tree.addHandler(capture)
+    try:
+        with TestClient(create_app(settings, recognizer=broken)) as c:
+            _, scan_id = _scan(c)
+            headers = {"Idempotency-Key": "unexpected-failure"}
+            first = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+            replay = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+    finally:
+        tree.removeHandler(capture)
+    with sqlite3.connect(settings.db_path) as conn:
+        action = conn.execute(
+            "SELECT status, recognition_run_id FROM recognition_idempotency"
+        ).fetchone()
+        run = conn.execute(
+            "SELECT outcome, error_code FROM recognition_runs WHERE id = ?",
+            (action[1],),
+        ).fetchone()
+
+    assert first.status_code == 503
+    assert replay.status_code == 503
+    assert first.json()["detail"] == "Recognition failed unexpectedly; try again"
+    assert first.json() == replay.json()
+    assert "payload was a list" not in first.text
+    # The stack trace must survive the switch away from a bare `raise`, and it must
+    # arrive on the configured tree, where the deployed container's handler is.
+    tracebacks = [r for r in capture.records if r.exc_info and r.levelno >= logging.ERROR]
+    assert len(tracebacks) == 1
+    assert tracebacks[0].name == "saregamapic.recognition"
+    assert tracebacks[0].exc_info[0] is ValueError
+    assert "payload was a list" in logging.Formatter().format(tracebacks[0])
+    assert calls == 1
+    assert action[0] == "completed"
+    assert run == ("failed", "internal_error")
+
+
 # --- Phase 3.5 Rung 1 tiled recognizer (offline experiment variant) ----------
 
 # Frozen hash of the whole-page prompt. PROMPT_VERSION is pinned and 4/5 baseline
