@@ -38,6 +38,10 @@ export interface Band {
  * the actual surplus, so an over-estimate — e.g. a title the user typed that was
  * never on the paper — cannot strand the lines; it degrades to the smaller,
  * correct skip. Defaults to 0, which is the original proportional behaviour.
+ * There is deliberately no symmetric guard for an UNDER-estimate: a surplus
+ * band the caller didn't declare is treated as line 0's row (see F26 — the
+ * caller derives the hint from transcribed text, which can be blank for a row
+ * that is physically there).
  */
 export function bandForLine(
   bands: Band[],

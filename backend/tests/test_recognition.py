@@ -571,6 +571,46 @@ def test_failed_idempotent_recognition_replays_error_without_second_model_call(t
     assert run == ("failed", "invalid_json")
 
 
+def test_unexpected_recognizer_error_answers_like_its_replay(tmp_path, caplog):
+    """F28: the generic failure path must answer the first attempt exactly as the
+    idempotent replay answers — 503 + the mapped 'internal_error' text — not a
+    bare 500 first and a 503 on replay. The exception text stays out of the
+    response, and the traceback still reaches the server log."""
+    calls = 0
+
+    def broken(_data, _ct):
+        nonlocal calls
+        calls += 1
+        raise ValueError("payload was a list, not an object")
+
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings, recognizer=broken)) as c:
+        _, scan_id = _scan(c)
+        headers = {"Idempotency-Key": "unexpected-failure"}
+        with caplog.at_level(logging.ERROR, logger="app.routers.transcriptions"):
+            first = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+        replay = c.post(f"/api/scans/{scan_id}/recognize", headers=headers)
+        with sqlite3.connect(settings.db_path) as conn:
+            action = conn.execute(
+                "SELECT status, recognition_run_id FROM recognition_idempotency"
+            ).fetchone()
+            run = conn.execute(
+                "SELECT outcome, error_code FROM recognition_runs WHERE id = ?",
+                (action[1],),
+            ).fetchone()
+
+    assert first.status_code == 503
+    assert replay.status_code == 503
+    assert first.json()["detail"] == "Recognition failed unexpectedly; try again"
+    assert first.json() == replay.json()
+    assert "payload was a list" not in first.text
+    # The stack trace must survive the switch away from a bare `raise`.
+    assert "ValueError: payload was a list" in caplog.text
+    assert calls == 1
+    assert action[0] == "completed"
+    assert run == ("failed", "internal_error")
+
+
 # --- Phase 3.5 Rung 1 tiled recognizer (offline experiment variant) ----------
 
 # Frozen hash of the whole-page prompt. PROMPT_VERSION is pinned and 4/5 baseline

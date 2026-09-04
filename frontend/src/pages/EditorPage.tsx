@@ -239,7 +239,13 @@ export function EditorPage() {
     // The detector counts the written title and header rows as ink rows, but
     // neither is an STF line — they sit above the first sargam row. Tell
     // bandForLine how many such rows to skip so line 0 scrolls to the first
-    // written line, not the title above it (F6). Over-estimating is safe.
+    // written line, not the title above it (F6). Over-estimating is safe —
+    // bandForLine clamps to the real surplus. UNDER-estimating is NOT (F26):
+    // this reads the transcribed TEXT, so a title/header row that is on the
+    // paper but came back blank from recognition is counted as absent and
+    // line 0 lands on that row again. Fixing that needs row presence from the
+    // detector, independent of transcription — deferred; until then, filling
+    // in the header fields is what re-aligns the scroll.
     const h = stf.header;
     const topExtra =
       (title.trim() ? 1 : 0) +

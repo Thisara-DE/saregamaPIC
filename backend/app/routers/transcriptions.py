@@ -8,6 +8,7 @@ human-in-the-loop rules).
 """
 
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -28,6 +29,7 @@ from ..stf import validate_stf
 from ._common import scan_row
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _to_response(row: sqlite3.Row) -> Transcription:
@@ -221,7 +223,7 @@ def _recognize(
             resource_id=scan_id,
         )
         raise HTTPException(status_code=503, detail=_safe_detail(e.code)) from e
-    except Exception:
+    except Exception as e:
         conn.execute(
             "INSERT INTO recognition_runs"
             " (id, scan_id, user_id, preprocessing_version, prompt_version,"
@@ -244,7 +246,22 @@ def _recognize(
                 (run_id, owner_id, idempotency_key),
             )
         conn.commit()
-        raise
+        # Same contract as the RecognitionUnavailable path above (F28): the first
+        # attempt must answer exactly what an idempotent replay of it will answer —
+        # a 503 with the mapped 'internal_error' text — instead of a bare 500 from
+        # ServerErrorMiddleware. The bare `raise` was also the only thing putting
+        # the stack into the server log, so keep the traceback via logger.exception
+        # and the structured provider-free line via upstream_failure.
+        logger.exception("recognition failed unexpectedly (scan %s, run %s)", scan_id, run_id)
+        upstream_failure(
+            request,
+            "recognition",
+            "internal_error",
+            repr(e),
+            user_id=owner_id,
+            resource_id=scan_id,
+        )
+        raise HTTPException(status_code=503, detail=_safe_detail("internal_error")) from e
 
     stf_json = json.dumps(result.stf, ensure_ascii=False)
     suggested_title = (result.suggested_title or "").strip()[:200]
