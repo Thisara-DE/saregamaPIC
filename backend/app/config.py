@@ -18,11 +18,13 @@ APP_VERSION = "0.1.0"
 # deploy pipeline can prove the sha CI tested is the one actually serving —
 # a bare "status: ok" would also pass for a stale container. Sources, in
 # order: SAREGAMAPIC_GIT_SHA (plain env var, for local/manual runs), then
-# backend/app/BUILD_SHA — a one-line file the Deploy workflow writes before
-# `railway up` (the CLI uploads the working tree, so Railway's own git metadata
-# is not available to that build; the file rides along in COPY backend/app) —
-# otherwise "unknown". Read at call time, not import time, so tests can point
-# it elsewhere and a dev checkout never has to carry the file (it is gitignored).
+# backend/app/BUILD_SHA — a TRACKED one-line placeholder ("unknown") that the
+# deploy workflows overwrite in the runner right before `railway up` (the CLI
+# uploads the working tree, so Railway's own git metadata is not available to
+# that build; the file rides along in COPY backend/app). It must stay tracked,
+# not gitignored: the upload walker honours .gitignore and would silently drop
+# an ignored stamp (F30). Never hand-edit it. Otherwise "unknown". Read at call
+# time, not import time, so tests can point it elsewhere.
 BUILD_SHA_FILE = Path(__file__).resolve().parent / "BUILD_SHA"
 
 

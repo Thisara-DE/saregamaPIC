@@ -68,6 +68,18 @@ def test_health_reports_the_git_sha_from_the_build_stamp(client, monkeypatch, tm
     assert client.get("/api/health").json()["git_sha"] == "7f6ceed0"
 
 
+def test_build_sha_placeholder_is_tracked_and_unstamped():
+    """F30: the stamp file must be a tracked placeholder saying exactly "unknown".
+    `railway up` honours .gitignore, so an ignored stamp never reaches the image
+    and every deploy would fail verification; and a committed real sha would make
+    a dev checkout claim to be a deployed build."""
+    assert config.BUILD_SHA_FILE.read_text(encoding="utf-8").strip() == "unknown"
+    ignore_lines = (config.REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert not [line for line in ignore_lines if "BUILD_SHA" in line], (
+        "backend/app/BUILD_SHA must not be gitignored (F30)"
+    )
+
+
 def test_https_security_headers(tmp_path):
     settings = Settings(
         data_dir=tmp_path / "data", app_base_url="https://app.example.test"

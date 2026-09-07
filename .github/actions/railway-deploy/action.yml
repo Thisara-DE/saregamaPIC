@@ -1,0 +1,85 @@
+name: Deploy a tested commit to Railway and prove it is serving
+description: >-
+  Stamps the commit sha into the build, runs `railway up`, then polls
+  /api/health until the live container reports that exact sha. Shared by
+  Deploy Dev and the UAT/Production promotion so the three environments can
+  never drift in how "deployed" is verified (review finding F32).
+
+inputs:
+  commit_sha:
+    description: The full sha being deployed; must equal the checked-out tree.
+    required: true
+  environment_label:
+    description: Human label for log lines (Dev / UAT / Production).
+    required: true
+  app_url:
+    description: Public base URL of the environment.
+    required: true
+  railway_token:
+    required: true
+  railway_project_id:
+    required: true
+  railway_service_id:
+    required: true
+  railway_environment_id:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # `railway up` uploads this working tree (Railway's own git metadata is not
+    # available to that build), so the tested sha is written into a TRACKED
+    # placeholder file that `COPY backend/app` carries into the image. It must be
+    # tracked, not gitignored: the upload walker honours .gitignore, so an
+    # ignored stamp would silently never leave the runner (finding F30).
+    - name: Stamp the tested commit into the build
+      shell: bash
+      run: |
+        printf '%s\n' "$COMMIT_SHA" > backend/app/BUILD_SHA
+        echo "stamped: $(cat backend/app/BUILD_SHA)"
+        if git check-ignore -q backend/app/BUILD_SHA; then
+          echo "::error::backend/app/BUILD_SHA is gitignored — railway up would drop the stamp (F30)"
+          exit 1
+        fi
+      env:
+        COMMIT_SHA: ${{ inputs.commit_sha }}
+
+    - name: Deploy ${{ inputs.environment_label }}
+      shell: bash
+      run: >-
+        railway up --ci
+        --project "$RAILWAY_PROJECT_ID"
+        --service "$RAILWAY_SERVICE_ID"
+        --environment "$RAILWAY_ENVIRONMENT_ID"
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway_token }}
+        RAILWAY_PROJECT_ID: ${{ inputs.railway_project_id }}
+        RAILWAY_SERVICE_ID: ${{ inputs.railway_service_id }}
+        RAILWAY_ENVIRONMENT_ID: ${{ inputs.railway_environment_id }}
+
+    # Not just "is something answering": the container serving traffic must be
+    # the commit that was tested. `railway up --ci` returns after the build;
+    # container start, Railway's own healthcheck and the traffic switch happen
+    # after it, so this loop must outlast `healthcheckTimeout` (300 s) in
+    # railway.json — 60 × 5 s — while the success path exits on the first match
+    # (finding F31).
+    - name: Verify ${{ inputs.environment_label }} is serving the tested commit
+      shell: bash
+      run: |
+        url="${APP_URL%/}/api/health"
+        live=""
+        for attempt in $(seq 1 60); do
+          live=$(curl --silent --fail "$url" | jq -r '.git_sha // empty' || true)
+          if [ "$live" = "$EXPECTED_SHA" ]; then
+            echo "$LABEL is serving $live"
+            exit 0
+          fi
+          echo "attempt $attempt/60: live='${live:-<no reply>}' expected=$EXPECTED_SHA"
+          [ "$attempt" -lt 60 ] && sleep 5
+        done
+        echo "::error::$LABEL never served $EXPECTED_SHA (last seen: '${live:-<no reply>}')"
+        exit 1
+      env:
+        APP_URL: ${{ inputs.app_url }}
+        EXPECTED_SHA: ${{ inputs.commit_sha }}
+        LABEL: ${{ inputs.environment_label }}
