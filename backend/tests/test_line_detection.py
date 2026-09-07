@@ -1,18 +1,22 @@
 """Unit tests for the projection-profile line detector (finding #11 auto-scroll).
 
-Synthetic images, not real sheets: these pin the algorithm's behaviour (run
-finding, gap merge, noise drop, blank page) so a refactor can't silently break
-it. Threshold tuning against the real hand-written corpus is a separate,
-login-gated follow-up noted in the module docstring.
+Synthetic images, not real sheets: these pin the algorithm's behaviour (stroke
+mask, deskew, run finding, valley splitting, noise drop, blank page) so a refactor
+can't silently break it. The real hand-written corpus is checked separately by the
+golden-file test at the bottom, which needs ``samples/`` and so only runs on a dev
+machine.
 
-The desk-photo helpers below exist because the earlier white-page-only fixtures
-could not express the input class every failure in the F5/F9/F13/F14 family came
-from — a phone capture with the table visible around the paper. They cover the
-four shapes that behave differently: a full surround, one edge, both sides, and a
-tilted edge. ``_write_row`` draws SPARSE ink (roughly the ~0.11 row coverage
-measured across the real ``samples/`` scans) rather than a solid bar, because a
-solid bar cannot distinguish an ink fraction measured over the paper span from
-one measured over the whole frame — which is the entire point of F9."""
+Every fixture writes SPARSE ink — short vertical dashes spread across the row,
+roughly the ~0.11 row coverage measured across the real ``samples/`` scans —
+rather than a solid bar. That is not cosmetic: the detector decides ink by the
+horizontal top-hat (a stroke is dark against the paper a few pixels to either
+side), so a solid full-width bar is not ink at all, and an ink fraction measured
+over the paper span is only distinguishable from one measured over the whole
+frame when the row is partly paper (F9). The desk-photo helpers cover the input
+class every failure in the F5/F9/F13/F14 family came from — a phone capture with
+the table visible — in the four shapes that behave differently (full surround,
+one edge, both sides, tilted edge), and the F25 helpers add the two the real
+capture path turned out to need: a hand shadow ON the paper, and a tilted sheet."""
 
 import io
 import json
@@ -24,9 +28,18 @@ from PIL import Image, ImageDraw, ImageOps
 
 from app.line_detection import (
     _fill_enclosed_gaps,
+    _guard_paper_edges,
+    _horizontal_max,
+    _horizontal_min,
     _merge_gaps,
     _otsu_threshold,
     _runs,
+    _skew_angle,
+    _smooth,
+    _split_at_valleys,
+    _stroke_mask,
+    _trim_to_core,
+    analyze_lines,
     detect_line_bands,
 )
 from app.storage import PREVIEW_MAX_DIM
@@ -65,15 +78,6 @@ def _bands_through_preview(path: Path) -> list[tuple[float, float]]:
         return detect_line_bands(preview.copy())
 
 
-def _sheet(bars: list[tuple[int, int]]) -> Image.Image:
-    """A white page with black full-width bars at the given (top, bottom) rows."""
-    im = Image.new("L", (WIDTH, HEIGHT), 255)
-    draw = ImageDraw.Draw(im)
-    for top, bottom in bars:
-        draw.rectangle([0, top, WIDTH - 1, bottom - 1], fill=0)
-    return im
-
-
 def _centres(bands: list[tuple[float, float]]) -> list[float]:
     return [(y0 + y1) / 2 for y0, y1 in bands]
 
@@ -81,32 +85,50 @@ def _centres(bands: list[tuple[float, float]]) -> list[float]:
 def _write_row(
     draw: ImageDraw.ImageDraw, top: int, bottom: int, x0: int, x1: int, *, dashes: int = 8
 ) -> None:
-    """A sparsely written row: `dashes` short strokes spread across `x0`..`x1`.
+    """A sparsely written row: `dashes` short vertical strokes spread across `x0`..`x1`.
 
     Covers a fraction of the row's paper width, the way real notation does — not
-    the solid bar `_sheet` draws, which would score as ink under any denominator.
+    a solid bar, which would score as ink under any denominator (and, under the
+    horizontal top-hat, not at all). Each dash is at most 6px wide: a pencil stroke
+    on the 1600px preview is 3–6px, and the horizontal closing's window is sized
+    for that, so a fixture must not draw fatter "strokes" than the sheets do.
     """
     step = (x1 - x0) / dashes
     for i in range(dashes):
         left = round(x0 + i * step)
-        draw.rectangle([left, top, left + max(2, round(step / 4)), bottom - 1], fill=0)
+        draw.rectangle([left, top, left + min(6, max(2, round(step / 4))), bottom - 1], fill=0)
+
+
+def _page(rows: list[tuple[int, int]], *, paper: int = 255) -> Image.Image:
+    """A flatbed-style page: paper fills the frame, written rows at (top, bottom)."""
+    im = Image.new("L", (WIDTH, HEIGHT), paper)
+    draw = ImageDraw.Draw(im)
+    for top, bottom in rows:
+        _write_row(draw, top, bottom, 10, WIDTH - 10)
+    return im
 
 
 def _desk_sheet(
-    bars: list[tuple[int, int]], *, surround: int = 90, paper: int = 230
+    rows: list[tuple[int, int]],
+    *,
+    surround: int = 90,
+    paper: int = 230,
+    width: int = WIDTH,
+    height: int = HEIGHT,
 ) -> Image.Image:
     """A phone photo, not a flatbed scan: a dark desk `surround` framing a lighter
-    `paper` rectangle on all four sides, with black note bars on the paper.
+    `paper` rectangle on all four sides, with written rows on the paper.
 
-    This is the input class the pure-white ``_sheet`` helper structurally cannot
+    This is the input class the pure-white ``_page`` helper structurally cannot
     produce, and it is exactly the F5 failure: the dark surround pulled the ink
     level down until every image row — blank gaps included — read as ink."""
-    im = Image.new("L", (WIDTH, HEIGHT), surround)
+    im = Image.new("L", (width, height), surround)
     draw = ImageDraw.Draw(im)
-    margin_x, margin_y = WIDTH // 6, HEIGHT // 12
-    draw.rectangle([margin_x, margin_y, WIDTH - margin_x, HEIGHT - margin_y], fill=paper)
-    for top, bottom in bars:
-        draw.rectangle([margin_x, top, WIDTH - margin_x, bottom - 1], fill=0)
+    margin_x, margin_y = width // 6, height // 12
+    draw.rectangle([margin_x, margin_y, width - margin_x, height - margin_y], fill=paper)
+    dashes = 8 if width <= WIDTH else 14
+    for top, bottom in rows:
+        _write_row(draw, top, bottom, margin_x + 4, width - margin_x - 4, dashes=dashes)
     return im
 
 
@@ -185,10 +207,51 @@ def _tilted_desk_sheet(
     return im
 
 
-def test_finds_one_band_per_bar_in_order():
-    bands = detect_line_bands(_sheet([(100, 140), (400, 440), (800, 860)]))
-    assert len(bands) == 3
-    # top-to-bottom, each roughly centred on its bar
+def _shadowed_sheet(
+    rows: list[tuple[int, int]],
+    *,
+    shadow: tuple[float, float] = (0.35, 0.62),
+    shadow_level: float = 0.4,
+    penumbra: int = 30,
+) -> Image.Image:
+    """F25's capture: a preview-sized (1200x1600) desk sheet with the
+    photographer's hand/phone shadow cast ON the paper — a vertical band across
+    ``shadow`` of the width with soft ``penumbra``-px edges, everything under it
+    (paper and strokes alike) darkened to ``shadow_level``. The shadow lies between
+    lit paper on both sides, so it is inside every row's paper span; under a
+    page-wide ink level its paper IS ink on every row, and the whole page becomes
+    one over-tall run — which is the real photographs' 0-band failure."""
+    im = _desk_sheet(rows, width=1200, height=1600)
+    width, height = im.size
+    px = im.load()
+    left, right = round(width * shadow[0]), round(width * shadow[1])
+    for x in range(left - penumbra, right + penumbra):
+        if x < left:
+            factor = 1 - (1 - shadow_level) * (x - (left - penumbra)) / penumbra
+        elif x < right:
+            factor = shadow_level
+        else:
+            factor = shadow_level + (1 - shadow_level) * (x - right) / penumbra
+        for y in range(height):
+            px[x, y] = round(px[x, y] * factor)
+    return im
+
+
+def _tilted_sheet(rows: list[tuple[int, int]], *, degrees: float) -> Image.Image:
+    """A preview-sized written desk sheet photographed ``degrees`` off square: the
+    whole ``_desk_sheet`` (paper edges and rows together) rotated about the image
+    centre. Bands come back in the deskewed frame, so their centres should land
+    back on ``rows`` — that round trip is the deskew's contract."""
+    surround = 90
+    return _desk_sheet(rows, surround=surround, width=1200, height=1600).rotate(
+        degrees, resample=Image.Resampling.BICUBIC, fillcolor=surround
+    )
+
+
+def test_finds_one_band_per_row_in_order():
+    bands = detect_line_bands(_page([(100, 140), (400, 440), (800, 860)]))
+    assert len(bands) == 3, bands
+    # top-to-bottom, each roughly centred on its row
     assert _centres(bands) == sorted(_centres(bands))
     assert abs(_centres(bands)[0] - 0.12) < 0.02
     assert abs(_centres(bands)[1] - 0.42) < 0.02
@@ -201,24 +264,32 @@ def test_blank_page_has_no_bands():
     assert detect_line_bands(Image.new("L", (WIDTH, HEIGHT), 255)) == []
 
 
-def test_close_rows_merge_into_one_band():
-    # gap of 8px < merge gap (0.015 * 1000 = 15) → one band, e.g. a note row and
-    # the flat dashes just beneath it.
-    bands = detect_line_bands(_sheet([(100, 110), (118, 128)]))
-    assert len(bands) == 1
+def test_octave_dots_belong_to_their_row():
+    # A note row with the octave dots just above it (3px dots, 3px clear of the
+    # letters). The dots are ink — small enough for the horizontal closing — but
+    # they must not become their own band: the smoothing and merge gap stitch them
+    # to the row they annotate.
+    im = _page([(100, 112)])
+    draw = ImageDraw.Draw(im)
+    for i in range(8):
+        x = 12 + round(i * 22.5)
+        draw.rectangle([x, 94, x + 2, 96], fill=0)
+    bands = detect_line_bands(im)
+    assert len(bands) == 1, bands
     y0, y1 = bands[0]
-    assert y0 < 0.11 and y1 > 0.12  # spans both bars
+    assert y0 <= 0.106 <= y1
 
 
 def test_well_separated_rows_stay_distinct():
-    # gap of 40px > merge gap → two bands.
-    bands = detect_line_bands(_sheet([(100, 110), (150, 160)]))
+    bands = detect_line_bands(_page([(100, 110), (150, 160)]))
     assert len(bands) == 2
 
 
 def test_tiny_speck_is_dropped_as_noise():
-    # a 3px mark < min height (0.006 * 1000 = 6) → not a line.
-    assert detect_line_bands(_sheet([(500, 503)])) == []
+    # a 3px mark holds fewer rows of ink than the min height (0.006 * 1000 = 6),
+    # and the profile smoothing must not inflate it past that (it spreads a 3-row
+    # speck over 7 rows) — hence the filter counts raw ink rows, not extent.
+    assert detect_line_bands(_page([(500, 503)])) == []
 
 
 def test_empty_image_is_safe():
@@ -229,14 +300,9 @@ def test_desk_surround_finds_the_real_rows():
     # F5 originally: a phone photo with the desk visible around the paper drove the
     # ink level low enough that every image row read as ink, so the detector
     # returned ONE band spanning the whole sheet and the editor re-centred the photo
-    # on every line focus. The max-height guard reduced that to `[]` — safe, but the
-    # feature was simply off for desk photos, which F5 recorded as its deferred half
-    # ("making desk photos produce USEFUL bands needs paper-region detection").
-    #
-    # With the ink fraction measured over each row's paper span, that half is done:
-    # the surround is outside the span at every row, so the two written rows are
-    # found exactly where they are. THIS ASSERTION IS THE OPPOSITE OF THE ONE IT
-    # REPLACES — the old `== []` encoded the degradation, not the wanted behaviour.
+    # on every line focus. With the ink fraction measured over each row's paper
+    # span, the surround is outside the span at every row, so the two written rows
+    # are found exactly where they are.
     bands = detect_line_bands(_desk_sheet([(300, 340), (600, 640)]))
     assert len(bands) == 2, bands
     assert abs(_centres(bands)[0] - 0.32) < 0.02
@@ -274,16 +340,9 @@ def test_side_desk_does_not_invert_the_classifier():
 def test_side_desk_soft_edge_still_finds_the_rows():
     # F19 asked whether the one-bucket edge inset survives a SOFT paper/desk edge.
     # Every other desk fixture draws a hard step edge, which the single-bucket inset
-    # removes exactly; the reviewer's arithmetic predicted the second (inner)
-    # penumbra bucket would survive the inset and push blank rows over
-    # _ROW_INK_FRACTION, returning either a spurious band or [] on a real soft edge.
-    # It does not: with a 30px ramp on this 200px fixture the rows are found cleanly.
-    # Verified out-of-band that the same holds at a realistic 1228px preview width up
-    # to a ~3-bucket ramp, so this pass is not an artifact of the narrow fixture. The
-    # concern is therefore ANSWERED by evidence, not by a code change — this test is
-    # the regression guard that a future inset change reintroducing it must trip.
-    # (A real desk photograph through the WebP path is still owed and would settle it
-    # beyond synthetics; see the session log.)
+    # removes exactly; a penumbra spans more. With a 30px ramp on this 200px fixture
+    # the rows are found cleanly — and under the top-hat a smooth ramp is its own
+    # local background, so it is not ink in the first place.
     rows = [(200, 240), (500, 540), (800, 840)]
     bands = detect_line_bands(_side_desk_sheet(rows, penumbra=30))
     assert len(bands) == len(rows), bands
@@ -312,23 +371,96 @@ def test_blank_sheet_on_a_desk_has_no_bands():
 
 
 def test_over_tall_run_is_dropped():
-    # The direct unit for the guard: a single dark block covering most of the page
-    # (0.05..0.95 ≈ 0.9 of height > _MAX_HEIGHT_FRACTION) is not a line, so it is
-    # dropped — the same shape as the collapsed-desk run, minus the surround.
-    assert detect_line_bands(_sheet([(50, 950)])) == []
+    # The direct unit for the max-height guard: strokes with no row structure at all
+    # — vertical hatching from 0.05 to 0.95 of the page — is one flat run with no
+    # valleys to split at, taller than _MAX_HEIGHT_FRACTION, so it is dropped.
+    im = Image.new("L", (WIDTH, HEIGHT), 255)
+    draw = ImageDraw.Draw(im)
+    _write_row(draw, 50, 950, 10, WIDTH - 10)
+    assert detect_line_bands(im) == []
+
+
+def test_shadow_on_the_paper_neither_hides_nor_merges_rows():
+    # F25: the real capture path — sheet on a music stand, phone in hand, room light
+    # — puts the photographer's shadow across part of the paper. Under the old
+    # page-wide ink level the shadowed paper WAS ink: on the four real photographs
+    # that gave 0 bands on two sheets and one section-sized band on the other two.
+    # Ink is now decided against each pixel's own local paper, so a stroke in the
+    # shadow is as much ink as one in the light and the shadow itself is nothing.
+    # Verified to FAIL against the old detector first: it returned 0 bands here.
+    rows = [(300, 360), (500, 560), (700, 760), (900, 960), (1100, 1160)]
+    bands = detect_line_bands(_shadowed_sheet(rows))
+    assert len(bands) == len(rows), bands
+    for (top, bottom), (y0, y1) in zip(rows, bands, strict=True):
+        assert y0 <= (top + bottom) / 2 / 1600 <= y1, (rows, bands)
+    # ...and the shadow alone, on an unwritten sheet, is not a band either.
+    assert detect_line_bands(_shadowed_sheet([])) == []
+
+
+def test_rows_bridged_by_marks_are_still_split():
+    # F25's second mechanism: on a dense sheet the gap between rows never falls to
+    # zero — octave dots, the ends of arcs, a stray stroke — so a single threshold
+    # merges a whole section. Here the gaps carry a sparse floor of small marks (≈2%
+    # ink, above _ROW_INK_FRACTION), which under threshold-only runs makes the four
+    # rows one run. The valley split cuts it back into four. Verified to FAIL
+    # against the old detector first: it returned one 0.10–0.46 band.
+    rows = [(100, 140), (200, 240), (300, 340), (400, 440)]
+    im = _page(rows)
+    draw = ImageDraw.Draw(im)
+    for y in range(140, 400, 6):
+        for x in (30, 90, 150):
+            draw.rectangle([x, y, x + 2, y + 2], fill=0)
+    bands = detect_line_bands(im)
+    assert len(bands) == len(rows), bands
+    for (top, bottom), (y0, y1) in zip(rows, bands, strict=True):
+        assert y0 <= (top + bottom) / 2 / HEIGHT <= y1, (rows, bands)
+
+
+def test_horizontal_marks_alone_are_not_ink():
+    # The property the valleys depend on: arcs, hold dashes and flat marks are long
+    # ALONG the row, so the horizontal closing treats them as background. A page
+    # holding only such marks has no bands. (Its cost: a row of nothing but hold
+    # dashes — no letters — is invisible too; the corpus has one such row.)
+    im = Image.new("L", (WIDTH, HEIGHT), 255)
+    draw = ImageDraw.Draw(im)
+    for y in (100, 300, 500):
+        for x in range(10, WIDTH - 40, 50):
+            draw.rectangle([x, y, x + 40, y + 1], fill=0)
+    assert detect_line_bands(im) == []
+
+
+def test_tilted_rows_are_deskewed_and_reported_in_the_row_frame():
+    # F25's third mechanism: a hand-held capture tilts, and at 8–10° a row sweeps
+    # more image height than the row pitch, so adjacent rows overlap in y and no
+    # projection can separate them. The detector finds the skew and projects in
+    # the deskewed frame; because the tilt here is a rotation about the image
+    # centre, the bands must land back on the rows as they were drawn. Preview-
+    # sized on purpose: at 8° over this sheet's 800px of paper a row sweeps ~112px,
+    # more than the 100px pitch. Verified to FAIL against the old detector first:
+    # it returned ONE band for the five rows.
+    rows = [(400, 440), (500, 540), (600, 640), (700, 740), (800, 840)]
+    result = analyze_lines(_tilted_sheet(rows, degrees=8.0))
+    assert len(result.bands) == len(rows), result
+    assert abs(result.skew_degrees + 8.0) <= 0.5, result.skew_degrees
+    for (top, bottom), (y0, y1) in zip(rows, result.bands, strict=True):
+        assert y0 <= (top + bottom) / 2 / 1600 <= y1, (rows, result.bands)
+
+
+def test_square_sheet_is_not_rotated():
+    result = analyze_lines(_page([(100, 140), (400, 440), (800, 860)]))
+    assert result.skew_degrees == 0.0
+    assert len(result.bands) == 3
 
 
 @pytest.mark.skipif(not _SAMPLES, reason="samples/ is gitignored; present on dev machines only")
 def test_real_sheets_match_the_committed_baseline():
-    # The real corpus is the only evidence _ROW_INK_FRACTION is calibrated right, and
+    # The real corpus is the only evidence the thresholds are calibrated right, and
     # it is gitignored, so this cannot run in CI. What it CAN do on a dev machine is
-    # fail loudly when a threshold change merges or loses a band — which the previous
-    # version could NOT, because it asserted only invariants the algorithm's shape
-    # already guarantees (in-range, sorted, non-overlapping, <=0.5 is the max-height
-    # filter's own predicate), so the exact Otsu-as-ink-level regression it was
-    # written for would have kept it green (F16). It now pins the per-sheet band
-    # COUNT to a committed golden file, measured through the production WebP preview
-    # path rather than a raw JPEG thumbnail the running system never sees (F17).
+    # fail loudly when a change merges or loses a band — which a shape-invariant
+    # test could NOT (F16). It pins the per-sheet band COUNT to a committed golden
+    # file, measured through the production WebP preview path rather than a raw
+    # JPEG thumbnail the running system never sees (F17). Since F25 the golden file
+    # covers the phone photographs as well as the flatbed scans.
     baseline: dict[str, int] = json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
     present = {p.name for p in _SAMPLES}
     # A partially-synced Dropbox folder must fail loudly, not silently check fewer
@@ -337,12 +469,9 @@ def test_real_sheets_match_the_committed_baseline():
     assert not missing, f"baseline sheets absent from samples/ (partial sync?): {missing}"
     for path in _SAMPLES:
         bands = _bands_through_preview(path)
-        # "At least one band" is a claim about the calibrated flatbed corpus, so it
-        # applies only to sheets the golden file knows. samples/ also carries the
-        # phone photos behind finding F25, which the detector currently answers with
-        # [] (hand shadow on the paper) — a known open bug, not a sync problem, and
-        # it must not mask a regression on the ten reviewed scans. Un-baselined
-        # sheets still get the shape invariants below.
+        # A sheet the golden file knows is a written sheet, so it must yield bands. A
+        # sheet dropped into samples/ but not yet baselined only gets the shape
+        # invariants below — pin its count via --update-baseline when ready.
         if path.name in baseline:
             assert bands, f"{path.name}: a written sheet must yield at least one band"
         assert all(0.0 <= y0 < y1 <= 1.0 for y0, y1 in bands), (path.name, bands)
@@ -354,12 +483,11 @@ def test_real_sheets_match_the_committed_baseline():
         if path.name in baseline:
             assert len(bands) == baseline[path.name], (
                 f"{path.name}: {len(bands)} bands now, golden file has "
-                f"{baseline[path.name]} — a threshold change merged or lost a row. "
+                f"{baseline[path.name]} — a change merged or lost a row. "
                 "If intended, regenerate with `python -m tests.test_line_detection "
-                "--update-baseline` and eyeball the diff before committing."
+                "--update-baseline`, eyeball the inspect_line_bands overlays, and "
+                "only then commit."
             )
-        # else: a newly added sheet, shape-checked above; pin its count via
-        # --update-baseline when ready. Adding a sheet stays cheap.
 
 
 def test_runs_and_merge_gaps_helpers():
@@ -406,10 +534,106 @@ def test_fill_enclosed_gaps_separates_heavy_writing_from_surround():
     assert _fill_enclosed_gaps([narrow, None, wide], max_run=10) == [narrow, wide, wide]
 
 
+def test_horizontal_closing_fills_short_gaps_only():
+    # A white row with a 3px dark gap and a 20px dark gap: the closing (max then
+    # min along the row, window 8) fills the short one and leaves the long one, so
+    # the top-hat sees the stroke and not the wide feature.
+    im = Image.new("L", (64, 1), 255)
+    px = im.load()
+    for x in range(10, 13):
+        px[x, 0] = 0
+    for x in range(30, 50):
+        px[x, 0] = 0
+    closed = _horizontal_min(_horizontal_max(im, 8), 8)
+    out = closed.load()
+    assert all(out[x, 0] == 255 for x in range(10, 13))  # stroke filled
+    assert all(out[x, 0] == 0 for x in range(34, 46))  # wide feature kept (core)
+    # ...and centred: the wide feature's edges have not drifted by a window
+    assert out[29, 0] == 255 and out[50, 0] == 255
+
+
+def test_stroke_mask_ignores_a_uniform_shadow():
+    # The mask is a half-scale image, 255 only at strokes: a page whose left half
+    # is darkened uniformly has no ink anywhere, a stroke on either half does.
+    im = Image.new("L", (200, 40), 230)
+    px = im.load()
+    for x in range(100):
+        for y in range(40):
+            px[x, y] = 90
+    assert _stroke_mask(im).getbbox() is None
+    draw = ImageDraw.Draw(im)
+    draw.rectangle([40, 10, 43, 30], fill=30)  # a stroke in the shadow
+    draw.rectangle([140, 10, 143, 30], fill=120)  # a stroke in the light
+    bbox = _stroke_mask(im).getbbox()
+    assert bbox is not None
+    assert bbox[0] <= 40 // 2 and bbox[2] >= 143 // 2, bbox
+
+
+def test_skew_angle_recovers_a_known_tilt():
+    # a stroke mask by hand: white dashes on black, six rows
+    mask = Image.new("L", (300, 400), 0)
+    draw = ImageDraw.Draw(mask)
+    for y in range(60, 360, 40):
+        for i in range(12):
+            x = 20 + i * 22
+            draw.rectangle([x, y, x + 3, y + 8], fill=255)
+    assert _skew_angle(mask) == 0.0
+    for degrees in (-5.0, 3.5):
+        tilted = mask.rotate(degrees, resample=Image.Resampling.NEAREST, fillcolor=0)
+        assert abs(_skew_angle(tilted) + degrees) <= 0.5, degrees
+    assert _skew_angle(Image.new("L", (300, 400), 0)) == 0.0
+
+
+def test_smooth_is_a_centred_box_average():
+    assert _smooth([0, 0, 1, 0, 0], 3) == [0, 1 / 3, 1 / 3, 1 / 3, 0]
+    assert _smooth([1, 2, 3], 1) == [1, 2, 3]
+    assert _smooth([], 5) == []
+
+
+def test_split_at_valleys_cuts_deep_valleys_only():
+    #            0   1   2   3   4   5   6   7   8
+    profile = [0.1, 0.2, 0.1, 0.02, 0.1, 0.2, 0.1, 0.0, 0.0]
+    # valley 0.02 < 0.5 * 0.2 → two pieces, cut at the minimum (index 3)
+    assert _split_at_valleys((0, 7), profile, 0.5) == [(0, 3), (3, 7)]
+    # raise the valley above half the smaller peak → one piece
+    profile[3] = 0.15
+    assert _split_at_valleys((0, 7), profile, 0.5) == [(0, 7)]
+    # a bump on a flank is absorbed by the taller peak, not split off
+    profile = [0.02, 0.2, 0.15, 0.16, 0.05, 0.0]
+    assert _split_at_valleys((0, 5), profile, 0.5) == [(0, 5)]
+    # too short to have two peaks
+    assert _split_at_valleys((0, 2), [0.1, 0.2], 0.5) == [(0, 2)]
+
+
+def test_trim_to_core_keeps_the_rows_around_the_peak():
+    profile = [0.02, 0.05, 0.2, 0.3, 0.2, 0.05, 0.02]
+    # 30% of 0.3 = 0.09 → rows 2..4
+    assert _trim_to_core((0, 7), profile, 0.014, 0.3) == (2, 5)
+    # the floor wins when it is higher than the ratio
+    assert _trim_to_core((0, 7), profile, 0.25, 0.3) == (3, 4)
+
+
+def test_guard_paper_edges_skips_frame_edges():
+    profile = [1.0] * 10
+    # paper from row 2 to row 8 exclusive: guard 2 rows inside each edge
+    has_span = [False, False, True, True, True, True, True, True, False, False]
+    _guard_paper_edges(profile, has_span, 2)
+    assert profile == [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0]
+    # paper filling the frame has no paper edges: nothing is zeroed
+    profile = [1.0] * 10
+    _guard_paper_edges(profile, [True] * 10, 2)
+    assert profile == [1.0] * 10
+    # paper reaching the top of the frame only: only the bottom edge is guarded
+    profile = [1.0] * 10
+    _guard_paper_edges(profile, [True] * 6 + [False] * 4, 2)
+    assert profile == [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+
+
 def _update_baseline() -> None:
     """Regenerate the committed golden file from the local samples/ corpus, through
     the same production preview path the test asserts against. Deliberate manual
-    step — run only after an INTENDED threshold change, then eyeball the git diff.
+    step — run only after an INTENDED detector change, then eyeball the git diff
+    AND the overlays from scripts/inspect_line_bands.py.
 
         cd backend && uv run python -m tests.test_line_detection --update-baseline
     """

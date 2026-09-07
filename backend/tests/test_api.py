@@ -438,11 +438,15 @@ def test_preview_downscales_and_leaves_original_untouched(client, settings):
 
 
 def _jpeg_with_bars(width: int, height: int, bars: list[tuple[int, int]]) -> bytes:
-    """A white JPEG with black full-width bars, for line-band detection."""
+    """A white JPEG with sparsely written rows (short vertical strokes spread
+    across each row), for line-band detection. Not solid full-width bars: the
+    detector decides ink by the horizontal top-hat — a stroke is dark against the
+    paper a few pixels to either side — so a solid bar is not ink at all."""
     im = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(im)
     for top, bottom in bars:
-        draw.rectangle([0, top, width - 1, bottom - 1], fill="black")
+        for x in range(20, width - 20, 40):
+            draw.rectangle([x, top, x + 4, bottom - 1], fill="black")
     buf = io.BytesIO()
     im.save(buf, "JPEG")
     return buf.getvalue()
