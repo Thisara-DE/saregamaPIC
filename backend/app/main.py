@@ -27,7 +27,7 @@ from .auth import (
 from .auth import (
     router as auth_router,
 )
-from .config import APP_VERSION, Settings
+from .config import APP_VERSION, Settings, git_sha
 from .recognition import Recognizer, make_recognizer
 from .retention import prune_expired
 from .routers import learning, scans, songs, transcriptions
@@ -202,7 +202,7 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
 
     @app.get("/api/health", response_model=Health)
     def health() -> Health:
-        return Health(status="ok", version=APP_VERSION)
+        return Health(status="ok", version=APP_VERSION, git_sha=git_sha())
 
     app.include_router(auth_router, prefix="/api")
     app.include_router(songs.router, prefix="/api")

@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
-from app import db
+from app import config, db
 from app.config import Settings
 from app.main import create_app
 from app.routers.songs import _SONG_PAGE_MAX
@@ -45,6 +45,39 @@ def test_health(client):
     assert "strict-transport-security" not in r.headers
     assert len(r.headers["x-request-id"]) == 32
     assert r.headers["x-request-id"] != "attacker-controlled"
+
+
+def test_health_reports_the_git_sha_from_the_environment(client, monkeypatch):
+    """The deploy pipeline compares /api/health's git_sha to the commit CI tested,
+    so a "status: ok" from a stale container can no longer pass verification."""
+    monkeypatch.setenv("SAREGAMAPIC_GIT_SHA", "  abc123def  ")
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+    assert body["git_sha"] == "abc123def"
+
+
+def test_health_reports_the_git_sha_from_the_build_stamp(client, monkeypatch, tmp_path):
+    """`railway up` builds from an uploaded tree, so Deploy writes the sha to
+    backend/app/BUILD_SHA; that file is the source when no env var is set, and
+    a build without either reports "unknown" rather than failing."""
+    monkeypatch.delenv("SAREGAMAPIC_GIT_SHA", raising=False)
+    stamp = tmp_path / "BUILD_SHA"
+    monkeypatch.setattr(config, "BUILD_SHA_FILE", stamp)
+    assert client.get("/api/health").json()["git_sha"] == "unknown"
+    stamp.write_text("7f6ceed0\n", encoding="utf-8")
+    assert client.get("/api/health").json()["git_sha"] == "7f6ceed0"
+
+
+def test_build_sha_placeholder_is_tracked_and_unstamped():
+    """F30: the stamp file must be a tracked placeholder saying exactly "unknown".
+    `railway up` honours .gitignore, so an ignored stamp never reaches the image
+    and every deploy would fail verification; and a committed real sha would make
+    a dev checkout claim to be a deployed build."""
+    assert config.BUILD_SHA_FILE.read_text(encoding="utf-8").strip() == "unknown"
+    ignore_lines = (config.REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert not [line for line in ignore_lines if "BUILD_SHA" in line], (
+        "backend/app/BUILD_SHA must not be gitignored (F30)"
+    )
 
 
 def test_https_security_headers(tmp_path):

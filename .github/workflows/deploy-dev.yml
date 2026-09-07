@@ -31,18 +31,14 @@ jobs:
           node-version: "20"
       - name: Install Railway CLI
         run: npm install --global @railway/cli
-      - name: Deploy tested commit to Railway Dev
-        run: >-
-          railway up --ci
-          --project "$RAILWAY_PROJECT_ID"
-          --service "$RAILWAY_SERVICE_ID"
-          --environment "$RAILWAY_ENVIRONMENT_ID"
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
-          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
-      - name: Verify Dev health
-        run: curl --fail --retry 8 --retry-delay 5 "${APP_URL%/}/api/health"
-        env:
-          APP_URL: ${{ vars.APP_URL }}
+      # Stamp → railway up → poll /api/health until it reports this exact sha.
+      # Shared with promote.yml so every environment proves "deployed" the same way.
+      - uses: ./.github/actions/railway-deploy
+        with:
+          commit_sha: ${{ github.event.workflow_run.head_sha }}
+          environment_label: Dev
+          app_url: ${{ vars.APP_URL }}
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          railway_project_id: ${{ vars.RAILWAY_PROJECT_ID }}
+          railway_service_id: ${{ vars.RAILWAY_SERVICE_ID }}
+          railway_environment_id: ${{ vars.RAILWAY_ENVIRONMENT_ID }}

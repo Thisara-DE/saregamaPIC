@@ -117,6 +117,9 @@ class SongImport(BaseModel):
 class Health(BaseModel):
     status: str
     version: str
+    # The commit serving this response ("unknown" outside a stamped build); the
+    # Deploy workflow compares it to the sha CI tested. See config.git_sha().
+    git_sha: str
 
 
 # --- Per-line photo bands (editor auto-scroll, finding #11) ---
