@@ -38,7 +38,12 @@ F13, F14 and F25), not a hypothetical:
   background and contribute nothing. The same property makes the arcs, hold
   dashes and flat marks that sit BETWEEN rows invisible to the profile — they
   are long along the row — so the profile's valleys are deeper and the rows
-  separate more cleanly than under any pixel-value threshold.
+  separate more cleanly than under any pixel-value threshold. The price (F34):
+  a row written ONLY as hold dashes, with no letters, has no strokes and yields
+  no band. The corpus has one (``20260813_204011``, y≈0.66–0.69). A missing
+  mid-page band shifts every line below it by up to a row in the editor's
+  line→band mapping; a vertical top-hat would recover the dashes but would bring
+  the arcs back, so the loss is accepted and documented rather than patched.
 - **The ink fraction is measured inside the paper, not across the frame** (F9).
   Captures routinely contain the desk around the sheet, and counting that
   surround as ink was every failure in the F5/F9/F13/F14 family: a dark desk
@@ -58,7 +63,13 @@ F13, F14 and F25), not a hypothetical:
   keeping the one whose profile is sharpest, then both masks are rotated about
   the image centre before bucketing. Bands are reported in that deskewed frame,
   which for the caller means "the row's y at the centre of the image" — the
-  right thing to scroll to, and within a few percent of the row's ends.
+  right thing to scroll to. It is NOT the row's extent on the un-rotated photo:
+  the row's ends sit ``(width/2)·sin(skew)`` above and below the band, ~4 % of
+  image height at the 9–10° of the F25 phone photos against a ~8 % row pitch.
+  Panning tolerates that; drawing a band onto the photo does not — rotate the
+  image by ``LineAnalysis.skew_degrees`` first, as ``scripts/inspect_line_bands``
+  does (F33). Its overlays are therefore in the deskewed frame too, and cannot
+  show the un-rotated editor's offset.
 - **Runs of ink are split at profile valleys, not only by threshold** (F25). On
   a dense sheet the gap between rows never falls to zero (octave dots, the ends
   of arcs, a stray stroke), so a single threshold merges a whole section. Each

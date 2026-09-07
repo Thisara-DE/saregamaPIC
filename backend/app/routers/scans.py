@@ -64,10 +64,19 @@ def get_scan_line_bands(scan_id: str, request: Request) -> LineBands:
     """Normalized vertical bands of the written rows, for the editor's per-line
     photo auto-scroll (finding #11).
 
-    Detection runs on the SAME cached preview the editor renders, so the bands
-    line up with the on-screen image without any coordinate conversion. Bands are
-    a pure function of the pixels — nothing is stored, and an undecodable image
-    just yields no bands (the editor then doesn't auto-scroll, rather than erroring)."""
+    Detection runs on the SAME cached preview the editor renders, so no scaling
+    is needed to map a band onto the on-screen image. One conversion IS implied,
+    though (F25/F33): the detector deskews the page before projecting, and the
+    bands are reported in that deskewed frame — i.e. a band is the row's vertical
+    extent at the image's centre column. The editor pans the un-rotated preview,
+    so on a tilted capture the row's ends sit above/below the band by
+    (width/2)·sin(skew): ~4 % of image height at the 9–10° of a hand-held phone
+    photo, against a ~8 % row pitch. Acceptable for panning (the row is still in
+    view); anyone drawing bands ON the photo must rotate it by the detector's
+    skew first (``line_detection.analyze_lines`` exposes ``skew_degrees``; this
+    route deliberately does not, yet). Bands are a pure function of the pixels —
+    nothing is stored, and an undecodable image just yields no bands (the editor
+    then doesn't auto-scroll, rather than erroring)."""
     row = scan_row(request, scan_id)
     data_dir = request.app.state.settings.data_dir
     if not (data_dir / row["image_path"]).is_file():

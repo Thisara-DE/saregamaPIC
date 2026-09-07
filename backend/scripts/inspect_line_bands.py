@@ -67,7 +67,9 @@ def _draw_overlay(
     Bands live in the deskewed frame (see ``line_detection``), so the preview is
     rotated by the same angle first — on a tilted photo the strips would otherwise
     cut across the rows they were found on. The grey corners are the rotation's
-    fill, not paper.
+    fill, not paper. Consequently this overlay shows whether the DETECTOR found
+    the rows; it cannot show the offset the editor sees when it pans the
+    un-rotated photo to a band (F33) — that check needs the real editor.
     """
     img = preview.rotate(
         skew_degrees, resample=Image.Resampling.BICUBIC, fillcolor=(128, 128, 128)
