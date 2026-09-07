@@ -6,6 +6,19 @@
  * also top to bottom, but the two counts need not match: recognition can split
  * or merge a row, a line can be blank, an annotation can sit off to the side.
  *
+ * Two facts about those bands the detector's consumers must know (F33, F34):
+ * - They are in the DESKEWED frame: the detector rotates a tilted capture until
+ *   the rows are horizontal, so a band is the row's y at the image's centre
+ *   column. The editor pans the un-rotated photo, so on a 9–10° phone photo the
+ *   row's ends sit ~4 % of image height above/below the band (row pitch ~8 %) —
+ *   fine for panning, wrong for drawing a band onto the photo without rotating.
+ * - A row written ONLY as hold dashes (no letters) yields NO band: ink is decided
+ *   by strokes that are thin along the row, which is what makes the arcs and
+ *   dashes between rows invisible and the rows separable. A missing band in the
+ *   middle is the direction the mapping below has no guard for (the `topExtra`
+ *   clamp only protects the top), so the lines below such a row drift by up to
+ *   one row until the proportional placement re-synchronises them.
+ *
  * Crucially, not every detected ink row is an STF line. The written song title
  * and the Concert/Alto/beat header both sit ABOVE the first sargam row, and the
  * recognition contract stores them separately (`song.title`, `stf.header`) —

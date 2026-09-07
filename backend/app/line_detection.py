@@ -14,114 +14,154 @@ line, and this module produces it WITHOUT the two things the alternatives cost:
 
 The method is a horizontal projection profile. A hand-written sheet is dark
 strokes on light paper separated by whitespace gaps, so each written row — a row
-of notes, a lyric line, a heading — is a run of ink-heavy image rows with blank
-rows above and below. We binarize to ink/paper, measure the ink fraction of each
-image row, keep the runs of ink-heavy rows, and return them as normalized
+of notes, a lyric line, a heading — is a peak in the per-row ink fraction with a
+valley above and below it. We find the strokes, measure the ink fraction of each
+image row, split the profile into its peaks, and return them as normalized
 ``[y0, y1]`` fractions of image height. Normalized coordinates map onto whatever
 downscaled copy the client renders, so the caller runs this on the same preview
 the editor shows and the bands line up exactly.
 
-**The ink fraction is measured inside the paper, not across the frame** (finding
-F9). Captures here are phone photographs, not flatbed scans, so the frame
-routinely contains the desk around the sheet. Counting that surround as ink is
-what produced every failure in the F5/F9/F13/F14 family: measured over the whole
-row, a dark desk contributes to the numerator exactly like writing does, so blank
-paper rows score as written ones and the resulting spurious bands silently shift
-every line's scroll position. The denominator is therefore each row's own paper
-span — the horizontal extent between its first and last paper column — and
-anything outside that span is not counted at all. A desk along one edge, down
-both sides, or crossing at an angle falls outside the span at every row and so
-cannot manufacture a band, which is what a whole-frame threshold could never
-achieve by tuning alone.
+Four things about how that is done are worth knowing before touching it, because
+each one was a real failure on the user's own photographs (findings F5, F9,
+F13, F14 and F25), not a hypothetical:
 
-Two consequences worth knowing before touching the thresholds:
+- **What counts as ink is decided locally, not by a page-wide grey level** (F25).
+  The real capture path is a sheet on a music stand photographed by a hand-held
+  phone under room light, and every such photo carries the photographer's
+  shadow across part of the paper. Any global threshold puts shadowed paper on
+  the ink side of the split, which turned whole sections into one band or into
+  nothing. Ink is now the *horizontal black top-hat*: a pixel is ink when it is
+  darker than the paper a few pixels to its left and right (a 1-D grey closing
+  along the row, minus the image). A stroke is thin along the row, so it stands
+  out against its own local paper whether that paper is lit or shadowed; a
+  shadow, the desk, and a paper edge are wide, so they are their own local
+  background and contribute nothing. The same property makes the arcs, hold
+  dashes and flat marks that sit BETWEEN rows invisible to the profile — they
+  are long along the row — so the profile's valleys are deeper and the rows
+  separate more cleanly than under any pixel-value threshold. The price (F34):
+  a row written ONLY as hold dashes, with no letters, has no strokes and yields
+  no band. The corpus has one (``20260813_204011``, y≈0.66–0.69). A missing
+  mid-page band shifts every line below it by up to a row in the editor's
+  line→band mapping; a vertical top-hat would recover the dashes but would bring
+  the arcs back, so the loss is accepted and documented rather than patched.
+- **The ink fraction is measured inside the paper, not across the frame** (F9).
+  Captures routinely contain the desk around the sheet, and counting that
+  surround as ink was every failure in the F5/F9/F13/F14 family: a dark desk
+  contributes to the numerator like writing does, so blank rows score as written
+  ones. The denominator is each row's own paper span — the extent between its
+  first and last paper column — and nothing outside it is counted at all, so a
+  desk along one edge, down both sides, or crossing at an angle cannot
+  manufacture a band. Where is the paper? Otsu's method over the histogram, which
+  splits the well-balanced {paper} vs {desk, ink} modes of a phone capture; on a
+  flatbed scan there is no second mode, so the span is the full width and the
+  step is a no-op.
+- **The page is deskewed before projecting** (F25). Hand-held captures tilt, and
+  the user's rows themselves slope a few degrees on the flatbed scans. Under a
+  tilt of θ a row sweeps ``width·tan θ`` of image height, which at 8–10° exceeds
+  the row pitch: adjacent rows overlap in y and no projection can separate them.
+  The skew is found by rotating the stroke mask through candidate angles and
+  keeping the one whose profile is sharpest, then both masks are rotated about
+  the image centre before bucketing. Bands are reported in that deskewed frame,
+  which for the caller means "the row's y at the centre of the image" — the
+  right thing to scroll to. It is NOT the row's extent on the un-rotated photo:
+  the row's ends sit ``(width/2)·sin(skew)`` above and below the band, ~4 % of
+  image height at the 9–10° of the F25 phone photos against a ~8 % row pitch.
+  Panning tolerates that; drawing a band onto the photo does not — rotate the
+  image by ``LineAnalysis.skew_degrees`` first, as ``scripts/inspect_line_bands``
+  does (F33). Its overlays are therefore in the deskewed frame too, and cannot
+  show the un-rotated editor's offset.
+- **Runs of ink are split at profile valleys, not only by threshold** (F25). On
+  a dense sheet the gap between rows never falls to zero (octave dots, the ends
+  of arcs, a stray stroke), so a single threshold merges a whole section. Each
+  run above the floor is cut at every valley that drops below half the smaller
+  of its two neighbouring peaks, and each piece is then trimmed to the rows that
+  hold at least 30 % of its own peak, so a band is the row's core rather than the
+  row plus half of the blank space around it.
 
-- There are **two thresholds, answering two different questions.** Where is the
-  paper? — Otsu's method over the histogram, which splits the well-balanced
-  {paper} vs {desk, ink} modes of a phone capture. What is ink? — the original
-  midpoint of the dynamic range. They are not interchangeable: Otsu assumes two
-  comparable classes, and on a clean scan ink is ~2 % of the pixels, so it drifts
-  up toward the paper mode and swallows the anti-aliased halo around every stroke.
-  Measured on the real ``samples/`` corpus, using Otsu as the ink level put the
-  threshold at 217 instead of 165 and merged adjacent written rows into bands up
-  to half the page tall. Desk contamination of the ink level is not a problem the
-  ink threshold has to solve, because the paper span already excludes the desk
-  from the measurement.
-- A row that is *entirely* dark has no paper span of its own, and is resolved by
-  position, not by pixel value: an all-dark run bounded by paper on both sides is
-  taken as writing and inherits its neighbours' span, while one that runs to the
-  image edge is surround and is dropped. A written row flush against the top or
-  bottom edge with no margin at all is therefore missed; real captures have a
-  margin, and missing a band degrades to not scrolling rather than scrolling
-  somewhere wrong. The enclosed case is treated as writing because that is the
-  useful default, but it is not only writing — an on-sheet shadow, fold, or resting
-  object is enclosed too and is mis-classified as a written row, bounded (not
-  prevented) by the max-height filter. See ``_fill_enclosed_gaps``.
+A row that is *entirely* dark has no paper span of its own, and is resolved by
+position, not by pixel value: an all-dark run bounded by paper on both sides is
+taken as writing and inherits its neighbours' span, while one that runs to the
+image edge is surround and is dropped. See ``_fill_enclosed_gaps``.
 
-The thresholds below are principled but still validated against synthetic images
-rather than the real hand-written corpus (the editor is login-gated). The
-synthetics now include the desk-photo input class in four shapes — full surround,
-one edge, both sides, and tilted — which is what the earlier white-page-only
-tests structurally could not express. Expect a tuning pass against real sheets.
+The thresholds below are principled but were calibrated against, and are guarded
+by, the real corpus: ``tests/line_bands_baseline.json`` pins the per-sheet band
+count through the production WebP preview path for every sheet in ``samples/``,
+flatbed scans and phone photographs alike. Regenerate it only after a deliberate
+change, and eyeball the overlays ``scripts/inspect_line_bands.py`` writes before
+committing — a count is not a position.
 """
 
-from PIL import Image, ImageOps
+from dataclasses import dataclass
 
-# A pixel counts as ink if it is darker than this fraction of the way from the
-# image's darkest to its lightest pixel. Anchoring to the image's own dynamic
-# range (rather than a fixed 0-255 level) adapts to a dim scan or a bright one.
-# A dark surround drags this level down, which only makes it STRICTER — the safe
-# direction, costing a faint stroke rather than inventing one — and the desk is
-# excluded from the measurement by the paper span regardless.
-_INK_LEVEL_FRACTION = 0.5
+from PIL import Image, ImageChops, ImageOps
+
 # Below this dynamic range the page is effectively uniform (blank, or a solid
 # fill) — there are no ink rows to find, so return nothing rather than slicing
 # noise. 40 of 255 is a faint-but-real pencil stroke on paper.
 _MIN_CONTRAST = 40
+# The stroke mask is computed at 1/_INK_SCALE of the preview's resolution. The
+# preview is 1600 px on its long side and a pencil stroke there is 3–6 px wide;
+# at half scale it is still 2–3 px, wide enough to survive the box downscale and
+# narrow enough for the closing window below, and the four ImageChops passes run
+# on a quarter of the pixels.
+_INK_SCALE = 2
+# Width, in half-scale pixels, of the horizontal closing window: a dark run
+# shorter than this along the row is filled with the paper beside it and so shows
+# up in the top-hat as ink; a longer one is background. 8 half-scale px = 16 px on
+# the preview, which covers any stroke, the vertical bar lines, and a small
+# octave dot, and excludes the arcs and hold dashes (tens of px long) and every
+# shadow or edge (hundreds). The window is built by doubling, so it is 8 exactly.
+_STROKE_WINDOW = 8
+# How much darker than its local paper a pixel must be to count as ink, in grey
+# levels. Pencil on paper drops 40–80 levels in the light and ~20–35 in a deep
+# shadow, where the same contrast scales with the illumination; WebP q80 noise on
+# flat paper is ±2–3. 16 sits clear of the noise and still catches the shadowed
+# strokes on the F25 photographs.
+_INK_DROP = 16
+# Skew search: candidate rotations in degrees, coarse pass then a fine pass around
+# the best coarse angle. ±12° covers a hand-held capture with margin (the F25
+# photographs run to ~9°); the user's rows on flatbed scans slope 2–6°.
+_SKEW_RANGE = 12.0
+_SKEW_COARSE_STEP = 1.5
+_SKEW_FINE_STEP = 0.25
+_SKEW_FINE_STEPS = 5
 # An image row is part of a written line when at least this fraction of ITS PAPER
-# SPAN is ink. A row of notes or lyrics covers well above this; blank paper sits
-# near zero. Low enough that a sparse line (a lone note, a short heading) still
-# trips it — a few percent of a wide row. Note the denominator: measured against
-# the paper span, this number means the same thing on a flatbed scan and on a
-# phone photo, which is exactly what F9/F13 showed a whole-width denominator
-# could not do.
-#
-# 0.014, not the 0.012 this was before the paper span existed — the constant had
-# to be re-calibrated because what it divides by changed. The old code averaged a
-# whole row into ONE byte and tested `value >= 0.012 * 255` (= `value >= 3.06`);
-# `value` is an integer, so that is `value >= 4`. But `value` is not `floor(255·f)`
-# — it is Pillow's resampled average, whose 8-bit accumulator is seeded with half
-# an LSB and so rounds half-up, making `value >= 4` mean `f >= 3.5/255 ≈ 0.0137`.
-# So the threshold that ACTUALLY SHIPPED was ≈0.0137, and 0.014 is a ~2% tightening
-# of it, holding shipped behaviour roughly constant while the denominator changed
-# underneath it — NOT the correction of a 17%-loose 0.0157 an earlier version of
-# this note claimed (see finding F18; that arithmetic was wrong). Pulling the other
-# way by a similar amount: the span's one-bucket inset at each end (see below) drops
-# ~2 of ~64 buckets, so the same ink is ~3% larger as a fraction; the two nearly
-# cancel. A re-tune must reason from ≈0.0137 as the known-good floor, not 0.0157.
-#
-# Calibrated against all 10 `samples/` scans, the only real corpus there is. That
-# comparison is now an EXECUTABLE golden file — tests/line_bands_baseline.json, the
-# per-sheet band count through the production WebP-q80 preview path — asserted by
-# test_real_sheets_match_the_committed_baseline, not the prose "0 merged, 0 lost"
-# that used to live here (which was measured on a JPEG thumbnail the running system
-# never sees; finding F17). Re-run `uv run python -m tests.test_line_detection
-# --update-baseline` (from backend/) after a deliberate threshold change, eyeball
-# the diff, and only then commit the new golden file.
+# SPAN is ink. Measured against the paper span, this number means the same thing
+# on a flatbed scan and on a phone photo. It was 0.014 under the old pixel-value
+# ink test and stays 0.014 under the top-hat: the top-hat finds fewer pixels per
+# row (strokes only, no arcs), but a short heading such as "Verse" still clears
+# it, and the corpus overlays were re-checked row by row after the change.
 _ROW_INK_FRACTION = 0.014
+# Rows within this fraction of image height of the paper's top or bottom edge are
+# not measured. A tilted sheet's edge is a thin dark line that, once deskewed,
+# collapses into a single horizontal row of "ink" just inside the paper; no
+# written row sits that close to the edge. Edges that run off the frame (a
+# flatbed scan fills it) are not paper edges and are left alone.
+_EDGE_GUARD_FRACTION = 0.015
+# The profile is box-smoothed over this fraction of image height before the peak
+# analysis so a one-row dip inside a stroke does not read as a valley. 0.005 of
+# 1600 px is 8 rows, well under any written row's height.
+_SMOOTH_FRACTION = 0.005
 # Ink runs closer than this (as a fraction of image height) are merged into one
-# band: it stitches a note row back together with the octave dots and flat dashes
-# that sit just above and below it, which would otherwise read as their own thin
-# rows. Kept small so a genuinely separate lyric line stays its own band.
+# run before the valley analysis: it stitches a note row back together with the
+# octave dots that sit just above and below it, which would otherwise read as
+# their own thin rows.
 _MERGE_GAP_FRACTION = 0.015
-# Runs shorter than this (fraction of image height) are dropped as specks —
-# eraser crumbs, bleed-through, a stray dot — not lines.
+# A valley splits a run when the profile there drops below this fraction of the
+# smaller of the two peaks it separates. Half is deliberately lenient: on the
+# dense F25 sheets the inter-row floor sits at 20–40 % of the row peaks, and a
+# real row's own internal dip (between its letters and its octave dots) does not
+# drop that far after smoothing.
+_VALLEY_RATIO = 0.5
+# After splitting, each piece is trimmed to the contiguous rows around its peak
+# that hold at least this fraction of the peak, so the band is the written row
+# rather than the row plus the blank space up to the cut.
+_CORE_RATIO = 0.3
+# Pieces with fewer rows of raw ink than this (fraction of image height) are
+# dropped as specks — eraser crumbs, bleed-through, a stray dot — not lines.
 _MIN_HEIGHT_FRACTION = 0.006
 # Runs taller than this (fraction of image height) are dropped: no single written
-# row on a sargam sheet is half the page (the real samples/ scans top out at a
-# 0.34-tall band, so 0.5 never touches a genuine row). Kept from the F5 fix as
-# harm reduction — with the paper-span denominator the whole-sheet collapse it was
-# written for should no longer occur, but a band that large is wrong however it
+# row on a sargam sheet is half the page. A run that tall is wrong however it
 # arose, and returning nothing puts the case on the documented no-op path (no
 # bands → the editor simply doesn't auto-scroll) instead of re-centring the photo
 # on every line focus. It also bounds the all-dark-run inheritance below.
@@ -145,6 +185,20 @@ _MIN_PAPER_SPAN_FRACTION = 0.25
 
 # Band = (y0, y1) normalized to [0, 1] of image height, top-to-bottom.
 Band = tuple[float, float]
+
+
+@dataclass(frozen=True)
+class LineAnalysis:
+    """Everything ``analyze_lines`` learned about a sheet.
+
+    ``bands`` are in the deskewed frame (see the module docstring);
+    ``skew_degrees`` is the rotation that was applied, counter-clockwise
+    positive as ``Image.rotate`` counts it, so a caller can rotate the same
+    image by it and draw the bands on the result.
+    """
+
+    bands: list[Band]
+    skew_degrees: float
 
 
 def _runs(flags: list[bool]) -> list[tuple[int, int]]:
@@ -180,10 +234,9 @@ def _otsu_threshold(histogram: list[int]) -> int:
     """The grey level that best splits ``histogram`` into dark and light classes.
 
     Standard Otsu: the threshold maximizing between-class variance. Returned as
-    "dark means ``value < t``". Chosen over a fixed fraction of the dynamic range
-    because that fraction is anchored to the image's extrema, so a single dark
-    desk pixel moves the ink level for the whole page (F5's fix hint (2), the
-    root cause behind F9/F13/F14).
+    "dark means ``value < t``". Used to locate the paper against the desk, where
+    the two classes are comparable in size; it is NOT used for ink (see the
+    module docstring — ink is decided locally).
 
     Levels with no pixels leave the variance unchanged, so the maximum is usually
     a plateau rather than a point — on a two-tone synthetic it spans everything
@@ -217,6 +270,79 @@ def _otsu_threshold(histogram: list[int]) -> int:
     return round(sum(plateau) / len(plateau))
 
 
+def _horizontal_max(im: Image.Image, window: int) -> Image.Image:
+    """Grey dilation along the row: each pixel becomes the max of the ``window``
+    pixels ending at it. Built by doubling shifted copies, so it is log2(window)
+    C-speed passes; ``window`` is rounded up to a power of two."""
+    shift = 1
+    while shift < window:
+        im = ImageChops.lighter(im, ImageChops.offset(im, shift, 0))
+        shift *= 2
+    return im
+
+
+def _horizontal_min(im: Image.Image, window: int) -> Image.Image:
+    """Grey erosion along the row over the ``window`` pixels STARTING at each pixel
+    — the mirror of ``_horizontal_max``, so that max-then-min is a closing centred
+    on the pixel rather than one shifted by a window's width."""
+    shift = 1
+    while shift < window:
+        im = ImageChops.darker(im, ImageChops.offset(im, -shift, 0))
+        shift *= 2
+    return im
+
+
+def _stroke_mask(gray: Image.Image) -> Image.Image:
+    """The ink mask at 1/_INK_SCALE resolution: 255 where a pixel is at least
+    ``_INK_DROP`` darker than the horizontal closing of its neighbourhood.
+
+    ``ImageChops.offset`` wraps around, so the outermost ``_STROKE_WINDOW``
+    half-scale columns see the opposite edge of the frame; they lie outside the
+    paper span (or inside its one-bucket inset) and are never counted.
+    """
+    width, height = gray.size
+    small = gray.resize(
+        (max(1, width // _INK_SCALE), max(1, height // _INK_SCALE)), Image.Resampling.BOX
+    )
+    closed = _horizontal_min(_horizontal_max(small, _STROKE_WINDOW), _STROKE_WINDOW)
+    return ImageChops.subtract(closed, small).point(lambda v: 255 if v >= _INK_DROP else 0)
+
+
+def _profile_sharpness(mask: Image.Image) -> int:
+    """How row-aligned the ink in ``mask`` is: the sum of squared differences
+    between adjacent rows of its whole-frame projection. Rows that line up with
+    the image rows give a spiky profile (large); the same rows tilted smear into
+    each other (small). Whole-frame is fine here — the desk is the same on every
+    row and only adds a slow ramp."""
+    profile = mask.resize((1, mask.height), Image.Resampling.BOX).tobytes()
+    return sum((profile[i] - profile[i - 1]) ** 2 for i in range(1, len(profile)))
+
+
+def _rotated(mask: Image.Image, degrees: float) -> Image.Image:
+    """``mask`` rotated about its centre, same size, corners filled with 0 (not
+    paper / not ink)."""
+    return mask.rotate(degrees, resample=Image.Resampling.NEAREST, fillcolor=0)
+
+
+def _skew_angle(mask: Image.Image) -> float:
+    """The rotation (degrees, counter-clockwise positive) that makes the written
+    rows in ``mask`` horizontal: coarse sweep over ±_SKEW_RANGE, then a fine sweep
+    around the best coarse angle. Returns 0.0 for a blank mask."""
+    if not mask.getbbox():
+        return 0.0
+
+    # Ties (a square page scores the same at ±0.25°) resolve toward the smaller
+    # rotation, so a sheet that needs none gets none.
+    def score(angle: float) -> tuple[int, float]:
+        return _profile_sharpness(_rotated(mask, angle) if angle else mask), -abs(angle)
+
+    steps = round(2 * _SKEW_RANGE / _SKEW_COARSE_STEP)
+    coarse = [-_SKEW_RANGE + i * _SKEW_COARSE_STEP for i in range(steps + 1)]
+    best = max(coarse, key=score)
+    fine = [best + i * _SKEW_FINE_STEP for i in range(-_SKEW_FINE_STEPS, _SKEW_FINE_STEPS + 1)]
+    return max(fine, key=score)
+
+
 def _paper_spans(rows: list[bytes]) -> list[tuple[int, int] | None]:
     """Each row's ``(first, last)`` paper bucket, or ``None`` if it has none.
 
@@ -244,19 +370,11 @@ def _fill_enclosed_gaps(
     spans and stays a candidate.
 
     Enclosed is treated *as* writing because that is the useful default, but the
-    class is not exhaustively "heavy writing". A third member is any dark band lying
-    ON the sheet — a cast shadow from the phone or photographer, a fold or curl, an
-    object resting on the paper — which is also enclosed by paper and so also
-    inherits a span, and if it is darker than ``ink_level`` becomes a band. This is
-    a known mis-classification, not a regression: the old whole-frame threshold
-    banded such a shadow too. It is bounded, not prevented: ``max_run`` caps the
-    inheritance, and the max-height filter drops what survives. Note those two
-    limits are the SAME number (``max_run`` is ``round(height * _MAX_HEIGHT_FRACTION)``),
-    so a run of exactly ``height/2`` passes both rather than being caught by the
-    second — an on-sheet shadow spanning close to half the page is the residual
-    case, and separating it would need a per-row ink *ceiling* over the paper span
-    (the ``_ROW_INK_MAX_FRACTION`` shape F13/F14 defeated when it was measured over
-    the frame), with the same fail-first fixture discipline the desk cases got.
+    class is not exhaustively "heavy writing": a cast shadow, a fold, or an object
+    resting on the sheet is enclosed too. Since ink is decided locally (top-hat),
+    such a region only becomes a band if it holds strokes — a uniform shadow
+    scores zero — so the inheritance is now safe rather than merely bounded by
+    ``max_run`` and the max-height filter.
     """
     filled = list(spans)
     start: int | None = None
@@ -275,12 +393,109 @@ def _fill_enclosed_gaps(
     return filled
 
 
-def detect_line_bands(im: Image.Image) -> list[Band]:
-    """Normalized vertical bands of the written rows on a sheet, top to bottom.
+def _guard_paper_edges(profile: list[float], has_span: list[bool], guard: int) -> None:
+    """Zero the ``guard`` rows just inside every paper edge, in place.
+
+    An edge is where the span appears or disappears; the frame's own top and
+    bottom are not edges (a flatbed scan fills the frame — its first row is
+    writing-eligible paper, not a paper edge)."""
+    for start, end in _runs(has_span):
+        if start > 0:
+            for r in range(start, min(end, start + guard)):
+                profile[r] = 0.0
+        if end < len(has_span):
+            for r in range(max(start, end - guard), end):
+                profile[r] = 0.0
+
+
+def _smooth(values: list[float], window: int) -> list[float]:
+    """Box-smooth ``values`` over ``window`` samples (centred; shorter at the
+    ends). ``window`` ≤ 1 returns a copy."""
+    n = len(values)
+    if window <= 1 or n == 0:
+        return list(values)
+    half = window // 2
+    prefix = [0.0]
+    for v in values:
+        prefix.append(prefix[-1] + v)
+    out = []
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        out.append((prefix[hi] - prefix[lo]) / (hi - lo))
+    return out
+
+
+def _split_at_valleys(
+    run: tuple[int, int], profile: list[float], ratio: float
+) -> list[tuple[int, int]]:
+    """Cut ``run`` at every valley that separates two peaks of ``profile``.
+
+    Peaks are taken from the highest down; a candidate peak survives only if, on
+    each side, the lowest point between it and the nearest surviving peak is
+    below ``ratio`` times the smaller of the two — otherwise it is a bump on that
+    neighbour's flank and is absorbed. Cuts go at the minimum between each pair of
+    surviving peaks. A run with fewer than two surviving peaks comes back whole.
+    """
+    start, end = run
+    if end - start < 3:
+        return [run]
+    peaks = [
+        i
+        for i in range(start + 1, end - 1)
+        if profile[i] > profile[i - 1] and profile[i] >= profile[i + 1]
+    ]
+    if profile[start] > profile[start + 1]:
+        peaks.insert(0, start)
+    if profile[end - 1] > profile[end - 2]:
+        peaks.append(end - 1)
+    kept: list[int] = []
+    for candidate in sorted(peaks, key=lambda i: -profile[i]):
+        separated = True
+        for other in kept:
+            lo, hi = (other, candidate) if other < candidate else (candidate, other)
+            valley = min(profile[lo : hi + 1])
+            if valley >= ratio * min(profile[candidate], profile[other]):
+                separated = False
+                break
+        if separated:
+            kept.append(candidate)
+    if len(kept) < 2:
+        return [run]
+    kept.sort()
+    edges = [start]
+    for a, b in zip(kept, kept[1:], strict=False):
+        segment = profile[a : b + 1]
+        edges.append(a + segment.index(min(segment)))
+    edges.append(end)
+    return [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
+
+
+def _trim_to_core(
+    run: tuple[int, int], profile: list[float], floor: float, ratio: float
+) -> tuple[int, int]:
+    """Shrink ``run`` to the contiguous rows around its peak whose profile is at
+    least ``max(floor, ratio * peak)``."""
+    start, end = run
+    segment = profile[start:end]
+    peak = start + segment.index(max(segment))
+    level = max(floor, ratio * profile[peak])
+    lo = peak
+    while lo - 1 >= start and profile[lo - 1] >= level:
+        lo -= 1
+    hi = peak + 1
+    while hi < end and profile[hi] >= level:
+        hi += 1
+    return (lo, hi)
+
+
+def analyze_lines(im: Image.Image) -> LineAnalysis:
+    """Find the written rows of a sheet: their bands plus the skew that was removed.
 
     ``im`` is any decodable image of the sheet (the caller passes the editor
-    preview). Returns ``[]`` for a blank or undecodable-looking page — the editor
-    then simply doesn't auto-scroll, which is the correct graceful degradation.
+    preview). ``bands`` is ``[]`` for a blank or undecodable-looking page — the
+    editor then simply doesn't auto-scroll, which is the correct graceful
+    degradation.
 
     Bands are fractions of the FULL image height even when the sheet occupies only
     part of the frame, so the caller can map them straight onto the rendered
@@ -289,28 +504,30 @@ def detect_line_bands(im: Image.Image) -> list[Band]:
     im = ImageOps.exif_transpose(im).convert("L")
     width, height = im.size
     if width == 0 or height == 0:
-        return []
+        return LineAnalysis([], 0.0)
 
     lo, hi = im.getextrema()
     if hi - lo < _MIN_CONTRAST:
-        return []
+        return LineAnalysis([], 0.0)
 
     # Where is the paper? Otsu over the histogram: on a phone capture it splits the
     # two large modes, paper against {desk, ink}. On a flatbed scan there is no
     # second mode, so everything but the writing is paper and the span is the full
-    # width — measured on the real samples/ corpus, 1590 of 1600 rows span the whole
-    # frame, so the paper step is a no-op there and behaviour is unchanged.
-    # Computed once, outside the lambda: point() evaluates its callable per palette
-    # entry, so an inline call would run Otsu 256 times per image.
+    # width. Computed once, outside the lambda: point() evaluates its callable per
+    # palette entry, so an inline call would run Otsu 256 times per image.
     paper_level = _otsu_threshold(im.histogram())
     paper = im.point(lambda p: 255 if p >= paper_level else 0)
-    # What is ink? A separate, tighter question — see the module docstring for why
-    # Otsu is the wrong answer to it.
-    ink_level = lo + _INK_LEVEL_FRACTION * (hi - lo)
-    ink = im.point(lambda p: 255 if p < ink_level else 0)
+    # What is ink? Decided against its own local paper — see the module docstring.
+    ink = _stroke_mask(im)
+
+    skew = _skew_angle(ink)
+    if skew:
+        ink = _rotated(ink, skew)
+        paper = _rotated(paper, skew)
 
     # Average into buckets: a BOX downscale to _PAPER_COLUMNS wide gives, per row,
-    # 255 x (paper fraction) and 255 x (ink fraction) of each bucket.
+    # 255 x (paper fraction) and 255 x (ink fraction) of each bucket. The ink mask
+    # is half-scale, so the same resize also brings it back to ``height`` rows.
     columns = min(_PAPER_COLUMNS, width)
     paper_grid = (
         paper.resize((columns, height), Image.Resampling.BOX)
@@ -324,10 +541,10 @@ def detect_line_bands(im: Image.Image) -> list[Band]:
     spans = _fill_enclosed_gaps(spans, round(height * _MAX_HEIGHT_FRACTION))
 
     min_span = _MIN_PAPER_SPAN_FRACTION * columns
-    ink_per_row: list[bool] = []
+    profile: list[float] = []
     for r, span in enumerate(spans):
         if span is None:
-            ink_per_row.append(False)
+            profile.append(0.0)
             continue
         # Inset past the buckets at each end of the span. Those straddle the edge
         # of the paper, so they hold surround by construction, and that leaks into
@@ -338,16 +555,43 @@ def detect_line_bands(im: Image.Image) -> list[Band]:
         # depends on; the benefit is a numerator containing only paper.
         first, last = span[0] + 1, span[1] - 1
         if last - first + 1 < min_span:
-            ink_per_row.append(False)
+            profile.append(0.0)
             continue
         row = ink_grid[r * columns + first : r * columns + last + 1]
         # sum() over a bytes slice is the row's ink, measured over the paper span
         # alone — the desk outside it is not in the numerator or the denominator.
-        ink_per_row.append(sum(row) >= _ROW_INK_FRACTION * 255 * len(row))
+        profile.append(sum(row) / (255 * len(row)))
 
-    runs = _runs(ink_per_row)
+    _guard_paper_edges(
+        profile, [s is not None for s in spans], round(height * _EDGE_GUARD_FRACTION)
+    )
+    raw = profile
+    profile = _smooth(raw, max(1, round(height * _SMOOTH_FRACTION)))
+
+    runs = _runs([v >= _ROW_INK_FRACTION for v in profile])
     runs = _merge_gaps(runs, round(height * _MERGE_GAP_FRACTION))
+    pieces = [
+        _trim_to_core(piece, profile, _ROW_INK_FRACTION, _CORE_RATIO)
+        for run in runs
+        for piece in _split_at_valleys(run, profile, _VALLEY_RATIO)
+    ]
+    # The min-height filter counts rows of RAW ink, not the piece's extent: the
+    # smoothing spreads a 3-row speck over a window's worth of rows, which would
+    # otherwise let it through as a band.
     min_height = max(1, round(height * _MIN_HEIGHT_FRACTION))
     max_height = height * _MAX_HEIGHT_FRACTION
-    runs = [(a, b) for a, b in runs if min_height <= b - a <= max_height]
-    return [(a / height, b / height) for a, b in runs]
+    pieces = [
+        (a, b)
+        for a, b in pieces
+        if b - a <= max_height
+        and sum(1 for r in range(a, b) if raw[r] >= _ROW_INK_FRACTION) >= min_height
+    ]
+    return LineAnalysis([(a / height, b / height) for a, b in pieces], skew)
+
+
+def detect_line_bands(im: Image.Image) -> list[Band]:
+    """Normalized vertical bands of the written rows on a sheet, top to bottom.
+
+    The route's entry point; see ``analyze_lines`` for the full result.
+    """
+    return analyze_lines(im).bands
