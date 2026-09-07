@@ -45,6 +45,7 @@ export interface SongImport {
 export interface Health {
   status: string;
   version: string;
+  git_sha: string; // commit serving the response, "unknown" outside a stamped build
 }
 
 // Per-line photo bands for the editor's auto-scroll (finding #11). Computed on

@@ -31,6 +31,13 @@ jobs:
           node-version: "20"
       - name: Install Railway CLI
         run: npm install --global @railway/cli
+      # `railway up` uploads this working tree; Railway's git metadata is not
+      # available to that build, so stamp the tested sha into the image ourselves.
+      # The file is gitignored and lands in the image via `COPY backend/app`.
+      - name: Stamp the tested commit into the build
+        run: printf '%s\n' "$HEAD_SHA" > backend/app/BUILD_SHA
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       - name: Deploy tested commit to Railway Dev
         run: >-
           railway up --ci
@@ -42,7 +49,25 @@ jobs:
           RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
           RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
           RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
-      - name: Verify Dev health
-        run: curl --fail --retry 8 --retry-delay 5 "${APP_URL%/}/api/health"
+      # Not just "is something answering": prove the container serving traffic is
+      # the commit CI tested. `railway up --ci` returns after the deployment
+      # completes, but poll briefly anyway in case the old container is still
+      # draining; a health reply carrying any other sha fails the deploy.
+      - name: Verify Dev is serving the tested commit
+        run: |
+          url="${APP_URL%/}/api/health"
+          live=""
+          for attempt in $(seq 1 24); do
+            live=$(curl --silent --fail "$url" | jq -r '.git_sha // empty' || true)
+            if [ "$live" = "$EXPECTED_SHA" ]; then
+              echo "Dev is serving $live"
+              exit 0
+            fi
+            echo "attempt $attempt: live='${live:-<no reply>}' expected=$EXPECTED_SHA"
+            sleep 5
+          done
+          echo "::error::Dev never served $EXPECTED_SHA (last seen: '${live:-<no reply>}')"
+          exit 1
         env:
           APP_URL: ${{ vars.APP_URL }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}

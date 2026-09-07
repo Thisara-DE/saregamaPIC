@@ -47,3 +47,7 @@ memories/
 
 # Line-band inspection overlays (contain private sheet images)
 line_bands_overlays/
+
+# Written by the Deploy workflow right before `railway up` so /api/health can
+# report the tested commit (config.git_sha()); never commit a stamped value.
+backend/app/BUILD_SHA

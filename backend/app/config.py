@@ -14,6 +14,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 APP_VERSION = "0.1.0"
 
+# The commit the running build was made from, reported by /api/health so the
+# deploy pipeline can prove the sha CI tested is the one actually serving —
+# a bare "status: ok" would also pass for a stale container. Sources, in
+# order: SAREGAMAPIC_GIT_SHA (plain env var, for local/manual runs), then
+# backend/app/BUILD_SHA — a one-line file the Deploy workflow writes before
+# `railway up` (the CLI uploads the working tree, so Railway's own git metadata
+# is not available to that build; the file rides along in COPY backend/app) —
+# otherwise "unknown". Read at call time, not import time, so tests can point
+# it elsewhere and a dev checkout never has to carry the file (it is gitignored).
+BUILD_SHA_FILE = Path(__file__).resolve().parent / "BUILD_SHA"
+
+
+def git_sha() -> str:
+    value = os.environ.get("SAREGAMAPIC_GIT_SHA", "").strip()
+    if value:
+        return value
+    try:
+        value = BUILD_SHA_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        value = ""
+    return value or "unknown"
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
