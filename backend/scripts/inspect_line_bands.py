@@ -32,7 +32,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageOps
 
-from app.line_detection import detect_line_bands
+from app.line_detection import analyze_lines
 from app.storage import PREVIEW_MAX_DIM
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -59,9 +59,19 @@ def _preview(path: Path) -> Image.Image:
         return preview.convert("RGB")
 
 
-def _draw_overlay(preview: Image.Image, bands: list[tuple[float, float]], dest: Path) -> None:
-    """Draw each band as a translucent red strip with solid edge lines, numbered."""
-    img = preview.copy()
+def _draw_overlay(
+    preview: Image.Image, bands: list[tuple[float, float]], skew_degrees: float, dest: Path
+) -> None:
+    """Draw each band as a translucent red strip with solid edge lines, numbered.
+
+    Bands live in the deskewed frame (see ``line_detection``), so the preview is
+    rotated by the same angle first — on a tilted photo the strips would otherwise
+    cut across the rows they were found on. The grey corners are the rotation's
+    fill, not paper.
+    """
+    img = preview.rotate(
+        skew_degrees, resample=Image.Resampling.BICUBIC, fillcolor=(128, 128, 128)
+    )
     width, height = img.size
     draw = ImageDraw.Draw(img, "RGBA")
     for i, (y0, y1) in enumerate(bands):
@@ -99,18 +109,22 @@ def main() -> None:
     )
     out_dir = Path(args.out).resolve()
 
-    print(f"{'sheet':45s} {'bands':>5s} {'baseline':>8s}  positions (y0-y1)")
+    print(f"{'sheet':45s} {'bands':>5s} {'baseline':>8s} {'skew':>6s}  positions (y0-y1)")
     for path in images:
         preview = _preview(path)
-        bands = detect_line_bands(preview.copy())
+        result = analyze_lines(preview.copy())
+        bands = result.bands
         want = baseline.get(path.name)
         flag = "" if want is None else ("  OK" if want == len(bands) else f"  != baseline {want}")
         pos = " ".join(f"{y0:.2f}-{y1:.2f}" for y0, y1 in bands)
-        print(f"{path.name:45s} {len(bands):5d} {('-' if want is None else want):>8}{flag}")
-        print(f"{'':45s} {'':5s} {'':8s}  {pos}")
+        print(
+            f"{path.name:45s} {len(bands):5d} {('-' if want is None else want):>8} "
+            f"{result.skew_degrees:+6.2f}{flag}"
+        )
+        print(f"{'':45s} {'':5s} {'':8s} {'':6s}  {pos}")
         if not args.no_overlay:
             dest = out_dir / f"{path.stem}.bands.png"
-            _draw_overlay(preview, bands, dest)
+            _draw_overlay(preview, bands, result.skew_degrees, dest)
     if not args.no_overlay:
         print(f"\noverlays written to {out_dir}")
         print("open them and check each red strip sits on a written row, with none on the desk.")
