@@ -78,16 +78,21 @@ export function profileName(p: InstrumentProfile): string {
  * Folding them together (rather than applying two rotations) is what keeps the
  * result in the nearest octave and keeps the operation exactly reversible.
  *
- * `targetPc` null = keep the sheet's own concert key (the default). Returns 0
- * when `sourcePc` is null: with no known concert key there is nothing to hold
- * fixed, so the letters must be shown exactly as stored.
+ * `targetPc` null = keep the sheet's own concert key (the default).
+ *
+ * An unknown `sourcePc` (unparseable header) disables only the KEY half: with no
+ * tonic there is no interval to transpose by. The anchor half never mentions the
+ * key, so it still applies — the letters are alto-anchored fingerings and the
+ * instrument in your hands is not an alto, whatever the header does or does not
+ * say (finding F35). What is left is exactly `CANONICAL_S_PC - sPc`, which is
+ * also what the general expression collapses to at `target == source`.
  */
 export function viewSemitones(
   profile: InstrumentProfile,
   sourcePc: number | null,
   targetPc: number | null,
 ): number {
-  if (sourcePc === null) return 0;
+  if (sourcePc === null) return transposeSemitones(profile.sPc, CANONICAL_S_PC);
   // Where the stored letters would sit had they been authored on THIS
   // instrument; the ordinary key rotation then runs from there.
   const authoredFrom = mod12(sourcePc + profile.sPc - CANONICAL_S_PC);
@@ -111,16 +116,18 @@ export function tonicFingering(profile: InstrumentProfile, concertPc: number): s
  * so it names the tuning plus where the tonic lands under the fingers, which is
  * what actually tells a player how the tune will sit.
  *
- * Empty with no known concert key, and that is load-bearing rather than tidy:
- * `viewSemitones` also declines to rotate in that case, so naming an instrument
- * here would caption alto-anchored letters as a flute's fingerings — a wrong
- * label on unchanged notes. The viewer says the scale is unknown instead.
+ * With no known concert key each half drops what it cannot know and keeps what
+ * it can. The sax says nothing — its label is only ever a key, and it re-fingers
+ * nothing. A flute still names its tuning, because the letters on screen HAVE
+ * been re-fingered for it (see `viewSemitones`); it just cannot say where the
+ * tonic falls, having no tonic.
  */
 export function instrumentHeader(profile: InstrumentProfile, concertPc: number | null): string {
-  if (concertPc === null) return "";
+  const tuning = `Flute ${pitchClassName(profile.sPc)}`;
+  if (concertPc === null) return profile.kind === "alto-sax" ? "" : tuning;
   return profile.kind === "alto-sax"
     ? `Alto ${pitchClassName(concertPc + 9)}`
-    : `Flute ${pitchClassName(profile.sPc)} · tonic ${tonicFingering(profile, concertPc)}`;
+    : `${tuning} · tonic ${tonicFingering(profile, concertPc)}`;
 }
 
 /**

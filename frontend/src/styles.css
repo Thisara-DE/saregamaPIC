@@ -1230,6 +1230,14 @@ button:disabled {
   margin-left: auto;
 }
 
+/* Secondary text inside a modal card. The card carries the APP palette even when
+   it opens over the viewer, so it must not inherit `.viewer .muted` (--v-faint,
+   chosen against the viewer's backdrop): that pairing computes to 2.78:1 on the
+   default night-theme/light-OS combination — finding F38. */
+.modal-card .modal-note {
+  color: var(--muted);
+}
+
 /* "What are you playing?" — the once-a-session instrument prompt. Its select
    lives outside .digital-controls, so it is styled here rather than inheriting
    the viewer's. Stacked, full width, and 1rem to clear the iOS zoom floor. */

@@ -103,7 +103,7 @@ describe("viewSemitones — the invariant that defines the feature", () => {
 
   it("always picks the nearest octave, so no view inflates octave dots", () => {
     for (const sPc of PCS) {
-      for (const source of PCS) {
+      for (const source of [...PCS, null]) {
         for (const target of [...PCS, null]) {
           const k = viewSemitones(bambooFlute(sPc), source, target);
           expect(k).toBeGreaterThanOrEqual(-5);
@@ -121,13 +121,23 @@ describe("viewSemitones — the invariant that defines the feature", () => {
     }
   });
 
-  it("shows stored letters verbatim when the header scale is unknown", () => {
-    // With no parseable concert key there is no tonic to hold fixed, so
-    // re-fingering is not defined; the stored text must be shown as-is.
+  it("still re-fingers when the header scale is unknown — only the key half is lost", () => {
+    // Finding F35. An unparseable header costs the KEY shift, which needs a
+    // tonic; the ANCHOR shift never mentions the key, and dropping it would hand
+    // a flute player alto-sax fingerings under a picker reading "flute in D".
+    // The headline invariant above must therefore hold here too, so this case is
+    // asserted against it rather than against a hard-coded number.
     for (const sPc of PCS) {
-      expect(viewSemitones(bambooFlute(sPc), null, null)).toBe(0);
-      expect(viewSemitones(bambooFlute(sPc), null, 3)).toBe(0);
+      const profile = bambooFlute(sPc);
+      const k = viewSemitones(profile, null, null);
+      for (const offset of PCS) {
+        expect(mod12(profile.sPc + offset + k)).toBe(mod12(CANONICAL_S_PC + offset));
+      }
+      // No source key means no interval, so asking for a target changes nothing.
+      expect(viewSemitones(profile, null, 3)).toBe(k);
     }
+    // The sax is still the identity: its anchor IS the canonical one.
+    expect(viewSemitones(ALTO_SAX, null, null)).toBe(0);
   });
 });
 
@@ -147,12 +157,13 @@ describe("header and selector labels", () => {
     expect(profileHint(FLUTE_D)).toBe("Fingerings for a flute in D — S sounds concert D");
   });
 
-  it("prints no instrument label when the header scale is unknown", () => {
-    // Nothing is re-fingered in that case (see viewSemitones), so a "Flute D"
-    // caption over alto-anchored letters would be a wrong label on unchanged
-    // notes. Say nothing rather than something false.
+  it("names a flute, but not the sax, when the header scale is unknown", () => {
+    // Each half keeps what it can still know. The flute's letters HAVE been
+    // re-fingered for it, so its tuning has to be on screen; it just has no
+    // tonic to point at. The sax re-fingers nothing and its label is only ever
+    // a key, so with no key it says nothing.
     expect(instrumentHeader(ALTO_SAX, null)).toBe("");
-    expect(instrumentHeader(FLUTE_D, null)).toBe("");
+    expect(instrumentHeader(FLUTE_D, null)).toBe("Flute D");
   });
 
   it("spells accidental fingerings with ♭/♯, never STF's _ and ^", () => {

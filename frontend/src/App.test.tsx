@@ -542,6 +542,67 @@ describe("App", () => {
     expect(screen.getByText("Flute D · tonic M")).toBeInTheDocument();
   });
 
+  // Finding F37: the nudge is available whenever the view is derived, so its
+  // badge cannot be tied to a key change — a flute at the sheet's own key could
+  // be shifted two octaves with nothing on screen saying so.
+  it("shows the octave nudge on the header even when the key has not changed", async () => {
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    // Query the header badge specifically — the nudge BUTTONS also say "8va".
+    expect(container.querySelector(".transposed-tag")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /8va▲/ }));
+    // The register moved but the key did not, so the badge says so and no more.
+    expect(container.querySelector(".transposed-tag")).toHaveTextContent("+1 8va");
+    expect(container.querySelector(".transposed-tag")).not.toHaveTextContent("transposed");
+  });
+
+  // Finding F35: an unparseable header costs the KEY shift, not the instrument's
+  // fingering shift. Handing a flute player alto-sax letters under a picker that
+  // says "flute in D" is a silent major 3rd, so the letters must still move.
+  it("re-fingers a sheet whose header scale is unknown, and says which flute", async () => {
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    const noHeader = {
+      ...digitalTranscription,
+      stf: { ...digitalTranscription.stf, header: { concert_scale: "", alto_scale: "", beat: "" } },
+    };
+    vi.stubGlobal("fetch", mockFetchJson(detail, noHeader));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Flute D");
+
+    // Same letters as the concert-G case: the anchor shift never needed the key.
+    expect(renderedNotes(container)).toEqual(["D♭,", "N♭,", "S", "G♭", "M", "P", "D♭"]);
+    // Only transposing is unavailable, and the view says exactly that.
+    expect(screen.queryByLabelText("Key")).not.toBeInTheDocument();
+    expect(screen.getByText(/Header scale unknown/)).toBeInTheDocument();
+  });
+
+  // Finding F36: React attaches its listeners at the root, so the prompt's own
+  // Escape handler does not stop the event reaching the viewer's native window
+  // listener — one Escape used to close the prompt AND navigate out.
+  it("Escape closes the instrument prompt without leaving the viewer", async () => {
+    sessionStorage.clear();
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("What are you playing?");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("Test Sinhala Song — 2 / 2")).toBeInTheDocument();
+  });
+
+  it("does not page the sheet behind an open instrument prompt", async () => {
+    sessionStorage.clear();
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("What are you playing?");
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByText("Test Sinhala Song — 2 / 2")).toBeInTheDocument();
+  });
+
   it("does not ask on a page with nothing transcribed to play", async () => {
     sessionStorage.clear();
     vi.stubGlobal("fetch", mockFetchJson(detail)); // no transcription -> 404

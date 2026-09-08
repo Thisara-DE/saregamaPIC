@@ -144,6 +144,12 @@ export function PageViewer() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // While a modal is open it owns the keyboard (finding F36). React attaches
+      // its listeners at the root container, so the prompt's own Escape handler
+      // does not stop the event reaching this native window listener: without
+      // this guard one Escape would both close the prompt AND navigate out of
+      // the viewer, and the arrow keys would page the sheet behind it.
+      if (asking) return;
       if (e.key === "ArrowLeft" && page > 1) {
         navigate(`/songs/${songId}/pages/${page - 1}`, { replace: true });
       } else if (e.key === "ArrowRight" && scans.some((s) => s.page_no === page + 1)) {
@@ -154,7 +160,7 @@ export function PageViewer() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate, songId, page, scans]);
+  }, [navigate, songId, page, scans, asking]);
 
   async function handleDeletePage() {
     if (!scan) return;
@@ -359,7 +365,8 @@ export function PageViewer() {
             </label>
           ) : (
             <span className="muted">
-              Header scale unknown — showing the stored fingerings unchanged.
+              Header scale unknown — no key to transpose from. Fingerings are still shown for the
+              instrument above.
             </span>
           )}
           {rotates && (
@@ -453,11 +460,16 @@ export function PageViewer() {
                 {shownConcert && <span>Concert {shownConcert}</span>}
                 {shownInstrument && <span>{shownInstrument}</span>}
                 {stf.header.beat && <span>{stf.header.beat}</span>}
-                {keyChanged && (
+                {/* Two independent facts, each shown on its own condition
+                    (finding F37): the key was changed, and the register was
+                    nudged. The nudge is available whenever the view is derived,
+                    so tying its badge to `keyChanged` used to let a flute be
+                    shifted two octaves with nothing on screen saying so. */}
+                {(keyChanged || octaveShift !== 0) && (
                   <span className="transposed-tag">
-                    transposed
+                    {keyChanged && "transposed"}
                     {octaveShift !== 0 &&
-                      ` · ${octaveShift > 0 ? "+" : "−"}${Math.abs(octaveShift)} 8va`}
+                      `${keyChanged ? " · " : ""}${octaveShift > 0 ? "+" : "−"}${Math.abs(octaveShift)} 8va`}
                   </span>
                 )}
               </div>
@@ -514,7 +526,10 @@ export function PageViewer() {
             }}
           >
             <h2 id="instrument-title">What are you playing?</h2>
-            <p id="instrument-body" className="muted">
+            {/* NOT `.muted`: inside `.viewer` that resolves to the viewer's
+                --v-faint, which is tuned for the viewer's own backdrop, not for
+                this card's app-palette --card (finding F38). */}
+            <p id="instrument-body" className="modal-note">
               The letters are fingerings, so they are shown for this instrument. The song keeps its
               own key either way.
             </p>
