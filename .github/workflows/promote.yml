@@ -27,7 +27,7 @@ jobs:
           ref: ${{ inputs.commit_sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm install --global @railway/cli
       # Same stamp → deploy → sha-verified health gate as Deploy Dev (F32): a
       # promotion only passes when UAT is serving exactly the requested commit.
@@ -53,7 +53,7 @@ jobs:
           ref: ${{ inputs.commit_sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm install --global @railway/cli
       - uses: ./.github/actions/railway-deploy
         with:
