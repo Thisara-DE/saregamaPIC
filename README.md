@@ -115,8 +115,14 @@ implementation plan are maintained in the project's private documentation.
 | Backend | FastAPI on Python 3.13, managed by uv | `backend/` |
 | Storage | SQLite plus immutable original scan images | `data/` |
 
-Vite remains on 6.x while the development machine uses Node 20.8. Upgrade Node to a
-current LTS release before moving to a newer Vite major version.
+The project targets **Node 22**. The `engines` floor in `frontend/package.json`,
+the `actions/setup-node` version in all three workflows, and the Dockerfile's
+frontend build stage are kept in step; Node 20 reached end-of-life in April 2026,
+so nothing here builds on it any more.
+
+Vite is still on 6.x. That used to be forced by the development machine's Node
+20.8, and no longer is — a Vite major upgrade is now an ordinary dependency
+change to schedule, not a blocked one.
 
 ### Dropbox-ignored dependency folders (Windows dev machine)
 

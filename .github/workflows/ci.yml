@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.8.1"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -55,18 +55,24 @@ jobs:
         # allowlisted when it appears as a substring of that blob (jq contains).
         # Every OTHER high/critical advisory still fails the build.
         #
-        # Allowlisted (dev/build-only, transitive, not in the deployed artifact):
-        #   GHSA-qwww-vcr4-c8h2 — react-router RSC-mode CSRF. Only the unstable RSC
-        #     APIs are affected; this Vite SPA (createBrowserRouter) doesn't use them,
-        #     and there's no fix on the react-router v7 line (v8 needs Node 22 / React
-        #     19.2, blocked by the Node 20.8 pin).
-        #   (2026-09-04) brace-expansion GHSA-mh99-v99m-4gvg / GHSA-rgw5-rvv9-x895 and
-        #     fast-uri GHSA-7p8r-x3mc-p8w7 were REMOVED from this list: `npm audit fix`
-        #     landed the maintainers' in-range patched releases (brace-expansion
-        #     1.1.18 / 2.1.4 / 5.0.9, fast-uri 3.1.7) with no override, so they no
-        #     longer trip audit. Bump beats allowlist when the fix is in range.
+        # The allowlist is deliberately EMPTY right now: an empty blob allowlists
+        # nothing, so every high/critical advisory fails. The mechanism stays
+        # because fresh upstream CVEs land on this gate regularly, and an
+        # exception is then a one-line change.
+        #
+        # Standing rule: bump beats allowlist whenever a fixed release exists.
+        # Entries retired once their fix shipped:
+        #   (2026-09-04) brace-expansion GHSA-mh99-v99m-4gvg / GHSA-rgw5-rvv9-x895
+        #     and fast-uri GHSA-7p8r-x3mc-p8w7 — `npm audit fix` landed the
+        #     maintainers' in-range patched releases with no override.
+        #   (2026-09-08) react-router GHSA-qwww-vcr4-c8h2 (RSC-mode CSRF) — the old
+        #     entry claimed no fix existed on the v7 line and blamed the Node 20.8
+        #     pin for blocking v8. Both claims were wrong: react-router-dom 7.18.3
+        #     fixes the advisory, there is no v8 release at all (latest is 7.18.3),
+        #     and 7.18.3 still declares node >=20. Bumping the exact pin
+        #     7.18.1 -> 7.18.3 clears it outright, so nothing is allowlisted.
         run: |
-          allow="https://github.com/advisories/GHSA-qwww-vcr4-c8h2"
+          allow=""
           npm audit --json > npm-audit.json || true
           npm audit || true
           filter='[.vulnerabilities[]?.via[]? | select(type=="object") | select(.severity=="high" or .severity=="critical") | select(.url as $u | ($allow | contains($u)) | not)]'
