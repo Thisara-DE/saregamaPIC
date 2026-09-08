@@ -27,3 +27,29 @@ export function writePref(key: string, value: string): void {
     /* preference is best-effort */
   }
 }
+
+/**
+ * The same pair scoped to ONE run of the app. `sessionStorage` clears when the
+ * tab (or the installed PWA) closes, which is the natural boundary for state
+ * that means "during this playing session" — e.g. whether we have already asked
+ * which instrument is in the player's hands. A mid-session reload keeps it; a
+ * relaunch, when you may well have picked up a different instrument, does not.
+ *
+ * Guarded exactly like the localStorage pair above, and for the same reason:
+ * access itself can throw, and no preference may take a view down with it.
+ */
+export function readSessionPref(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function writeSessionPref(key: string, value: string): void {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    /* preference is best-effort */
+  }
+}

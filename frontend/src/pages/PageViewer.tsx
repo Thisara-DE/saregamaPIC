@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
@@ -8,17 +8,26 @@ import {
   scanImageUrl,
   scanPreviewUrl,
 } from "../api/client";
+import { InstrumentPicker } from "../components/InstrumentPicker";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { ProgressiveImage } from "../components/ProgressiveImage";
 import { StfLineText } from "../components/StfLineText";
+import { useFocusTrap } from "../focusTrap";
+import {
+  askedThisSession,
+  instrumentHeader,
+  keyColumnHeading,
+  keyColumnValue,
+  loadProfile,
+  markAskedThisSession,
+  profileHint,
+  saveProfile,
+  viewSemitones,
+  type InstrumentProfile,
+} from "../instrumentProfile";
 import { readPref, writePref } from "../prefs";
 import { NOTE_KINDS } from "../stfGrammar";
-import {
-  pitchClassName,
-  scalePitchClass,
-  transposeLineOfKind,
-  transposeSemitones,
-} from "../stfTranspose";
+import { pitchClassName, scalePitchClass, transposeLineOfKind } from "../stfTranspose";
 import type { SongDetail, Transcription } from "../api/types";
 
 type View = "original" | "digital";
@@ -80,6 +89,15 @@ export function PageViewer() {
   // per page — they are reading preferences, not per-sheet performance choices.
   const [digitalScale, setDigitalScale] = useState(loadDigitalScale);
   const [theme, setTheme] = useState<Theme>(loadTheme);
+  // Which instrument is in the player's hands (Phase 3.6). Like the reading
+  // preferences it persists and does NOT reset per page — you do not put the
+  // flute down between pages — but unlike them it changes what the notes SAY:
+  // the letters are fingerings, so they are re-derived for this instrument
+  // while the song keeps its own concert key.
+  const [profile, setProfile] = useState<InstrumentProfile>(loadProfile);
+  const [asking, setAsking] = useState(false);
+  const askDialog = useRef<HTMLDivElement>(null);
+  useFocusTrap(askDialog, asking);
 
   const page = Number(pageNo);
   const scans = useMemo(() => song?.scans ?? [], [song]);
@@ -169,23 +187,56 @@ export function PageViewer() {
 
   const stf = transcription?.stf;
   // The stored (original) scale, from the header's concert name. Null when the
-  // header has no parseable scale — then transposition is unavailable.
+  // header has no parseable scale — then there is no tonic to hold fixed, so
+  // neither transposition nor re-fingering is defined and the stored letters are
+  // shown exactly as they are.
   const sourcePc = stf ? scalePitchClass(stf.header.concert_scale) : null;
   const canTranspose = sourcePc !== null;
-  // Base key change picks the nearest octave (signed, [-5,+6]); the manual nudge
-  // adds whole octaves. keyChanged = a different tonic is selected (octave nudge
-  // alone doesn't count as a transposition — the scale is unchanged).
-  const baseSemitones =
-    targetPc !== null && sourcePc !== null ? transposeSemitones(sourcePc, targetPc) : 0;
-  const keyChanged = baseSemitones !== 0;
-  const semitones = baseSemitones + (keyChanged ? octaveShift * 12 : 0);
+  // One rotation carries both halves of the view (see instrumentProfile.ts): the
+  // chosen key AND the chosen instrument's fingering anchor, folded into the
+  // nearest octave. The manual nudge then adds whole octaves on top.
+  const baseSemitones = viewSemitones(profile, sourcePc, targetPc);
+  // A different concert key is selected — i.e. the MUSIC changes, not just the
+  // fingering. (Not the same as `baseSemitones !== 0`: an instrument whose
+  // anchor happens to cancel the key change rotates by zero, and a flute at the
+  // song's own key rotates without changing the key at all.)
+  const keyChanged = targetPc !== null && targetPc !== sourcePc;
+  // Whether the view is derived at all. While it is not, the stored text is
+  // rendered byte-for-byte — the fidelity rule's identity case, which only the
+  // Alto Sax profile at the song's own key reaches.
+  const rotates = keyChanged || baseSemitones !== 0;
+  const semitones = rotates ? baseSemitones + octaveShift * 12 : 0;
 
-  // Header labels for the (possibly transposed) view: verbatim in the original
-  // scale, derived (concert = target, alto = target + 9) once the key changes.
+  // Header labels for the (possibly transposed) view. The concert key is
+  // verbatim from the sheet until a new key is chosen; the right-hand label is
+  // whatever the selected instrument makes of that key — the written key on the
+  // sax, the tuning plus the tonic's fingering on a flute.
+  const shownConcertPc = keyChanged ? targetPc : sourcePc;
   const shownConcert =
     !keyChanged || sourcePc === null ? stf?.header.concert_scale : pitchClassName(targetPc!);
-  const shownAlto =
-    !keyChanged || sourcePc === null ? stf?.header.alto_scale : pitchClassName(targetPc! + 9);
+  // Prefer the sheet's own verbatim alto string where it applies, so the printed
+  // pair can never disagree with the paper over a spelling.
+  const shownInstrument =
+    profile.kind === "alto-sax" && !keyChanged && stf?.header.alto_scale
+      ? `Alto ${stf.header.alto_scale}`
+      : instrumentHeader(profile, shownConcertPc);
+
+  function chooseProfile(next: InstrumentProfile) {
+    setProfile(next);
+    saveProfile(next); // the next session's default
+    setOctaveShift(0); // fresh nearest-octave register for the new fingering
+  }
+
+  // "What are you playing?", once per playing session, the first time a digital
+  // view is opened. Asking here rather than on app start means it only ever
+  // interrupts someone who is about to read notation off the screen, and the
+  // question is asked while the answer is visibly relevant.
+  useEffect(() => {
+    if (view !== "digital" || !stf || stf.lines.length === 0) return;
+    if (askedThisSession()) return;
+    markAskedThisSession();
+    setAsking(true);
+  }, [view, stf]);
 
   return (
     <div className={`viewer theme-${theme}`}>
@@ -248,14 +299,25 @@ export function PageViewer() {
 
       {view === "digital" && stf && (
         <div className="digital-controls">
+          {/* Instrument first: it decides what every letter to its right MEANS,
+              so it reads as the premise of the key selector rather than a
+              setting tucked away after it. */}
+          <label>
+            Instrument
+            <InstrumentPicker value={profile} onChange={chooseProfile} />
+          </label>
           {canTranspose ? (
             <label>
               Key
-              {/* One row per scale, keyed by its CONCERT pitch class, showing both
-                  names (Concert left, Alto sax right). Concert D and Alto B are the
-                  same scale, so they share the single "— Original" row. Sorted by
-                  the concert scale (left column, ascending). */}
+              {/* One row per scale, keyed by its CONCERT pitch class: the concert
+                  name on the left, what the selected instrument makes of it on
+                  the right (its written key on the sax, the tonic's fingering on
+                  a flute). Both columns describe the same scale, so they share
+                  the single "— Original" row. Sorted by concert pitch. */}
               <select
+                // As with the instrument select: this label wraps both the
+                // control and the hint line, so name the control explicitly.
+                aria-label="Key"
                 value={targetPc ?? sourcePc!}
                 onChange={(e) => {
                   const pc = Number(e.target.value);
@@ -263,45 +325,44 @@ export function PageViewer() {
                   setOctaveShift(0); // fresh nearest-octave default for the new key
                 }}
               >
-                <optgroup label={`Concert${NBSP.repeat(4)}Alto`}>
-                  {Array.from({ length: 12 }, (_, concertPc) => ({
-                    concertPc,
-                    altoPc: (concertPc + 9) % 12,
-                  }))
-                    .sort((a, b) => a.concertPc - b.concertPc)
-                    .map(({ concertPc, altoPc }) => {
-                      const original = concertPc === sourcePc;
-                      // The Original row echoes the header's verbatim scale strings
-                      // so it can never disagree with the "Concert …" line above;
-                      // every other row is named from the flat-preferring table.
-                      const concert =
-                        original && stf.header.concert_scale
-                          ? stf.header.concert_scale
-                          : pitchClassName(concertPc);
-                      const alto =
-                        original && stf.header.alto_scale
-                          ? stf.header.alto_scale
-                          : pitchClassName(altoPc);
-                      // nbsp padding + a monospace select align the two columns.
-                      const label =
-                        concert.padEnd(2, NBSP) +
-                        NBSP.repeat(4) +
-                        alto +
-                        (original ? `${NBSP.repeat(3)}— Original` : "");
-                      return (
-                        <option key={concertPc} value={concertPc}>
-                          {label}
-                        </option>
-                      );
-                    })}
+                <optgroup label={`Concert${NBSP.repeat(4)}${keyColumnHeading(profile)}`}>
+                  {Array.from({ length: 12 }, (_, concertPc) => concertPc).map((concertPc) => {
+                    const original = concertPc === sourcePc;
+                    // The Original row echoes the header's verbatim scale strings
+                    // so it can never disagree with the "Concert …" line above;
+                    // every other row is named from the flat-preferring table.
+                    // The right column only has a verbatim form on the sax — a
+                    // flute's fingering is always derived.
+                    const concert =
+                      original && stf.header.concert_scale
+                        ? stf.header.concert_scale
+                        : pitchClassName(concertPc);
+                    const instrument =
+                      original && profile.kind === "alto-sax" && stf.header.alto_scale
+                        ? stf.header.alto_scale
+                        : keyColumnValue(profile, concertPc);
+                    // nbsp padding + a monospace select align the two columns.
+                    const label =
+                      concert.padEnd(2, NBSP) +
+                      NBSP.repeat(4) +
+                      instrument +
+                      (original ? `${NBSP.repeat(3)}— Original` : "");
+                    return (
+                      <option key={concertPc} value={concertPc}>
+                        {label}
+                      </option>
+                    );
+                  })}
                 </optgroup>
               </select>
-              <span className="key-hint">Concert → Alto = up a major 6th (down a minor 3rd)</span>
+              <span className="key-hint">{profileHint(profile)}</span>
             </label>
           ) : (
-            <span className="muted">Header scale unknown — showing the original scale.</span>
+            <span className="muted">
+              Header scale unknown — showing the stored fingerings unchanged.
+            </span>
           )}
-          {keyChanged && (
+          {rotates && (
             <span className="octave-nudge" role="group" aria-label="Octave">
               <button
                 className="viewer-btn oct-btn"
@@ -321,7 +382,7 @@ export function PageViewer() {
               </button>
             </span>
           )}
-          {keyChanged && (
+          {(targetPc !== null || octaveShift !== 0) && (
             <button
               className="viewer-btn reset-key"
               onClick={() => {
@@ -387,10 +448,10 @@ export function PageViewer() {
             className="viewer-digital"
             style={{ "--digital-scale": digitalScale } as CSSProperties}
           >
-            {(shownConcert || shownAlto || stf.header.beat) && (
+            {(shownConcert || shownInstrument || stf.header.beat) && (
               <div className="digital-header">
                 {shownConcert && <span>Concert {shownConcert}</span>}
-                {shownAlto && <span>Alto {shownAlto}</span>}
+                {shownInstrument && <span>{shownInstrument}</span>}
                 {stf.header.beat && <span>{stf.header.beat}</span>}
                 {keyChanged && (
                   <span className="transposed-tag">
@@ -433,6 +494,43 @@ export function PageViewer() {
         >
           ›
         </button>
+      )}
+
+      {asking && (
+        <div className="modal-overlay" role="presentation" onClick={() => setAsking(false)}>
+          <div
+            ref={askDialog}
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="instrument-title"
+            aria-describedby="instrument-body"
+            // tabIndex -1 lets useFocusTrap move focus onto the card itself on
+            // open, so the Escape handler below actually receives keys.
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setAsking(false);
+            }}
+          >
+            <h2 id="instrument-title">What are you playing?</h2>
+            <p id="instrument-body" className="muted">
+              The letters are fingerings, so they are shown for this instrument. The song keeps its
+              own key either way.
+            </p>
+            <label className="instrument-ask">
+              Instrument
+              <InstrumentPicker value={profile} onChange={chooseProfile} />
+            </label>
+            <div className="modal-actions">
+              {/* One way out, and it is not a decision: the picker above has
+                  already applied. Dismissing simply stops asking. */}
+              <button className="primary" onClick={() => setAsking(false)}>
+                Start playing
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

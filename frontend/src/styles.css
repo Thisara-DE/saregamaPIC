@@ -677,6 +677,13 @@ button:disabled {
   color: #111;
 }
 
+/* The instrument names are prose, not aligned columns, so this select opts out
+   of the monospace the Concert/Alto list needs. It keeps the 1rem floor: the
+   iOS focus-zoom (finding 13) is just as unwelcome on this control. */
+.digital-controls .instrument-select {
+  font-family: inherit;
+}
+
 .viewer-btn.reset-key {
   min-height: 2rem;
   min-width: auto;
@@ -1221,6 +1228,28 @@ button:disabled {
 
 .modal-actions .danger-link {
   margin-left: auto;
+}
+
+/* "What are you playing?" — the once-a-session instrument prompt. Its select
+   lives outside .digital-controls, so it is styled here rather than inheriting
+   the viewer's. Stacked, full width, and 1rem to clear the iOS zoom floor. */
+.instrument-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.instrument-ask select {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--muted);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 1rem;
 }
 
 /* Faithful STF rendering: marks stacked above/below the letter. */
