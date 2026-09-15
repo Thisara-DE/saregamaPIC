@@ -15,7 +15,13 @@ RUN npm run build
 # keeping their Rust-dependency CVEs (e.g. quinn-proto) out of the container scan.
 # `only-system` forces the venv onto the base image's Python so its interpreter
 # symlinks stay valid once the venv is copied into the identical runtime base.
-FROM python:3.13-slim AS backend-build
+#
+# The Debian release is pinned (`-trixie`) in BOTH Python stages, and they must
+# stay in step: the venv built here is copied into the runtime image, so the two
+# bases must be the same image. The bare `3.13-slim` tag follows whatever Debian
+# is current, and it moved 12 -> 13 in 2026 without a single line changing here;
+# an OS release should change only by choice (the Node 20 -> 22 lesson).
+FROM python:3.13-slim-trixie AS backend-build
 COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
 ENV UV_PYTHON_PREFERENCE=only-system
 WORKDIR /app/backend
@@ -23,7 +29,7 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
 
-FROM python:3.13-slim AS runtime
+FROM python:3.13-slim-trixie AS runtime
 
 # gosu drops root → appuser in the entrypoint (see docker-entrypoint.sh); it is a
 # tiny setuid helper, not a service dependency. Create a fixed-id unprivileged
