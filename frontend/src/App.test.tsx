@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RouteErrorPage, routes } from "./App";
@@ -97,6 +97,13 @@ describe("App", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     localStorage.clear(); // the digital text-size preference persists here
+    // "What are you playing?" fires once per playing session and would otherwise
+    // open over every digital-view test, in an order-dependent way (sessionStorage
+    // outlives a single test). Clear it for isolation, then answer it: these
+    // tests are about the steady state. The tests that exercise the prompt
+    // itself clear this key again.
+    sessionStorage.clear();
+    sessionStorage.setItem("saregamapic.instrumentAsked", "1");
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:sheet-preview"),
@@ -414,6 +421,194 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
     await screen.findByText("Test Sinhala Song — 1 / 2");
     expect(container.querySelector(".viewer")).toHaveClass("theme-day");
+  });
+
+  // --- Phase 3.6: instrument profiles -------------------------------------
+  //
+  // Reads the notes off the screen the way a player does: `.stf-note` renders
+  // the accidental as a class and the octave as dots, so reconstruct the token
+  // from what is actually painted rather than trusting an internal string.
+  function renderedNotes(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll(".digital-lines .stf-note")).map((note) => {
+      const letter = note.querySelector(".stf-letter")?.textContent ?? "";
+      const accidental = note.classList.contains("flat")
+        ? "♭"
+        : note.classList.contains("sharp")
+          ? "♯"
+          : "";
+      const above = (note.querySelector(".stf-dots.above")?.textContent ?? "").trim();
+      const below = (note.querySelector(".stf-dots.below")?.textContent ?? "").trim();
+      return letter + accidental + "'".repeat(above.length) + ",".repeat(below.length);
+    });
+  }
+
+  it("shows a sheet verbatim on the Alto Sax — the profile the letters are stored in", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    expect(screen.getByText("Alto E")).toBeInTheDocument();
+    expect(renderedNotes(container)).toEqual(["S", "R", "G", "P", "D", "N", "S'"]);
+    // Nothing is derived, so there is nothing to reset or nudge.
+    expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
+  });
+
+  it("re-fingers the same sheet for a D flute and keeps it in concert G", async () => {
+    // The user's worked example (2026-09-08): Concert G / Alto E on a flute
+    // whose S sounds concert D. The tune must not move — the fingers do.
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    expect(screen.getByText("Flute D · tonic M")).toBeInTheDocument();
+    expect(screen.queryByText("Alto E")).not.toBeInTheDocument();
+    expect(renderedNotes(container)).toEqual(["D♭,", "N♭,", "S", "G♭", "M", "P", "D♭"]);
+    // The key has NOT changed, so the view carries no "transposed" tag — but it
+    // is derived, so the octave nudge is available for a flute's register.
+    expect(screen.queryByText(/transposed/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /8va▲/ })).toBeInTheDocument();
+  });
+
+  it("switches instrument live, and remembers it for the next session", async () => {
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    fireEvent.change(screen.getByLabelText("Instrument"), { target: { value: "bamboo-flute:7" } });
+
+    // A G flute plays a concert-G tune from S — the easy case the user picks a
+    // flute for. Same sounding music, different fingerings.
+    expect(screen.getByText("Flute G · tonic S")).toBeInTheDocument();
+    expect(renderedNotes(container)).toEqual(["G♭", "M", "P", "N♭", "S'", "R'", "G♭'"]);
+    expect(localStorage.getItem("saregamapic.instrument")).toBe("bamboo-flute:7");
+  });
+
+  it("keeps the instrument across a page change — you do not put the flute down", async () => {
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Flute D · tonic M");
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    await screen.findByText("Test Sinhala Song — 1 / 2");
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    await screen.findByText("Flute D · tonic M");
+  });
+
+  it("transposes on top of the flute's fingering when a new key is chosen", async () => {
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    // Ask for concert C on the D flute: now the music DOES move, so the header
+    // follows it and the transposed tag appears.
+    fireEvent.change(screen.getByLabelText("Key"), { target: { value: "0" } });
+    expect(screen.getByText("Concert C")).toBeInTheDocument();
+    // Concert C on a D flute is fingered from N♭ — exactly the awkward case the
+    // user said they would answer by reaching for a different flute.
+    expect(screen.getByText("Flute D · tonic N♭")).toBeInTheDocument();
+    expect(screen.getByText(/transposed/)).toBeInTheDocument();
+    expect(renderedNotes(container)).toEqual(["R♭", "G♭", "M", "D♭", "N♭", "S'", "R♭'"]);
+
+    // Reset returns to the sheet's own key — still re-fingered for the flute.
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.getByText("Flute D · tonic M")).toBeInTheDocument();
+  });
+
+  it("asks what you are playing once per playing session, and applies the answer", async () => {
+    sessionStorage.clear(); // a fresh playing session: the app was just opened
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container, unmount } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("What are you playing?");
+
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Instrument"), {
+      target: { value: "bamboo-flute:2" },
+    });
+    // The answer applies to the view behind the prompt immediately.
+    expect(renderedNotes(container)).toEqual(["D♭,", "N♭,", "S", "G♭", "M", "P", "D♭"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start playing" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    unmount();
+
+    // Same playing session, another sheet: asked and answered, so no second nag.
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("Flute D · tonic M")).toBeInTheDocument();
+  });
+
+  // Finding F37: the nudge is available whenever the view is derived, so its
+  // badge cannot be tied to a key change — a flute at the sheet's own key could
+  // be shifted two octaves with nothing on screen saying so.
+  it("shows the octave nudge on the header even when the key has not changed", async () => {
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Concert G");
+
+    // Query the header badge specifically — the nudge BUTTONS also say "8va".
+    expect(container.querySelector(".transposed-tag")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /8va▲/ }));
+    // The register moved but the key did not, so the badge says so and no more.
+    expect(container.querySelector(".transposed-tag")).toHaveTextContent("+1 8va");
+    expect(container.querySelector(".transposed-tag")).not.toHaveTextContent("transposed");
+  });
+
+  // Finding F35: an unparseable header costs the KEY shift, not the instrument's
+  // fingering shift. Handing a flute player alto-sax letters under a picker that
+  // says "flute in D" is a silent major 3rd, so the letters must still move.
+  it("re-fingers a sheet whose header scale is unknown, and says which flute", async () => {
+    localStorage.setItem("saregamapic.instrument", "bamboo-flute:2");
+    const noHeader = {
+      ...digitalTranscription,
+      stf: { ...digitalTranscription.stf, header: { concert_scale: "", alto_scale: "", beat: "" } },
+    };
+    vi.stubGlobal("fetch", mockFetchJson(detail, noHeader));
+    const { container } = renderAt("/songs/abc123/pages/2");
+    await screen.findByText("Flute D");
+
+    // Same letters as the concert-G case: the anchor shift never needed the key.
+    expect(renderedNotes(container)).toEqual(["D♭,", "N♭,", "S", "G♭", "M", "P", "D♭"]);
+    // Only transposing is unavailable, and the view says exactly that.
+    expect(screen.queryByLabelText("Key")).not.toBeInTheDocument();
+    expect(screen.getByText(/Header scale unknown/)).toBeInTheDocument();
+  });
+
+  // Finding F36: React attaches its listeners at the root, so the prompt's own
+  // Escape handler does not stop the event reaching the viewer's native window
+  // listener — one Escape used to close the prompt AND navigate out.
+  it("Escape closes the instrument prompt without leaving the viewer", async () => {
+    sessionStorage.clear();
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("What are you playing?");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("Test Sinhala Song — 2 / 2")).toBeInTheDocument();
+  });
+
+  it("does not page the sheet behind an open instrument prompt", async () => {
+    sessionStorage.clear();
+    vi.stubGlobal("fetch", mockFetchJson(detail, digitalTranscription));
+    renderAt("/songs/abc123/pages/2");
+    await screen.findByText("What are you playing?");
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByText("Test Sinhala Song — 2 / 2")).toBeInTheDocument();
+  });
+
+  it("does not ask on a page with nothing transcribed to play", async () => {
+    sessionStorage.clear();
+    vi.stubGlobal("fetch", mockFetchJson(detail)); // no transcription -> 404
+    renderAt("/songs/abc123/pages/1");
+    await screen.findByText("Test Sinhala Song — 1 / 2");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("viewer shows the ORIGINAL photo, not the thumbnail", async () => {

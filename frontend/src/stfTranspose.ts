@@ -55,6 +55,18 @@ const PC_TOKEN: { letter: string; accidental: "" | "_" | "^" }[] = [
   { letter: "N", accidental: "" }, // 11
 ];
 
+/**
+ * Name a fingering (a semitone offset from S, any sign, wraps) for DISPLAY —
+ * `S`, `R♭`, `M♯`. Same PC_TOKEN bijection the rotation uses, so a label can
+ * never drift from the token the view actually renders; typeset with ♭/♯ because
+ * this goes in prose (headers, menus), not into STF text, which spells the same
+ * marks `_` and `^`.
+ */
+export function pitchClassSargam(offset: number): string {
+  const { letter, accidental } = PC_TOKEN[(((offset % 12) + 12) % 12)]!;
+  return letter + (accidental === "_" ? "♭" : accidental === "^" ? "♯" : "");
+}
+
 // Western note name -> pitch class (0..11), for scale selectors / header labels
 // (mirrors backend _NOTE_BASE in stf.py).
 const NOTE_BASE: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
