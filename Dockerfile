@@ -28,7 +28,14 @@ FROM python:3.13-slim AS runtime
 # gosu drops root → appuser in the entrypoint (see docker-entrypoint.sh); it is a
 # tiny setuid helper, not a service dependency. Create a fixed-id unprivileged
 # user for the server process.
+#
+# `apt-get upgrade` first: the base tag floats, but Docker Hub rebuilds it days
+# after Debian ships a security update, and the Trivy gate (ignore-unfixed) fails
+# on any OS package with a fix available in that window. Applying the security
+# repo at build time closes it — 2026-09-15: 12 HIGH/CRITICAL (gzip, pcre2,
+# sqlite, perl) all already fixed in trixie-security, none yet in the base image.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends gosu \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 appuser \
