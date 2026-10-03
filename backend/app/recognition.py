@@ -479,6 +479,7 @@ def _recognize_image(
     system: str,
     schema: dict,
     user_text: str,
+    effort: str | None = None,
 ):
     """Send one image to the model and return (parsed_payload, response).
 
@@ -486,16 +487,24 @@ def _recognize_image(
     refuses a non-streaming call it estimates could outlive the HTTP timeout, and
     streaming keeps the connection active for the long run. Raises
     RecognitionUnavailable on a network error, truncation, refusal, or bad JSON.
+
+    ``effort`` is omitted from the request when None, so the production call keeps
+    the model's own default (``high`` on Opus 4.8). Model A/Bs pass it explicitly:
+    defaults differ between models (Opus 5.5 defaults to ``medium``), and an
+    unpinned effort would confound the comparison.
     """
     import anthropic
 
     b64 = base64.standard_b64encode(jpeg).decode("ascii")
+    output_config: dict = {"format": {"type": "json_schema", "schema": schema}}
+    if effort is not None:
+        output_config["effort"] = effort
     try:
         with client.messages.stream(
             model=model,
             max_tokens=_MAX_OUTPUT_TOKENS,
             thinking={"type": "adaptive"},
-            output_config={"format": {"type": "json_schema", "schema": schema}},
+            output_config=output_config,
             system=system,
             messages=[
                 {
@@ -539,8 +548,12 @@ def _recognize_image(
     return payload, resp
 
 
-def make_recognizer(api_key: str, model: str) -> Recognizer:
-    """Build the production whole-page recognizer."""
+def make_recognizer(api_key: str, model: str, *, effort: str | None = None) -> Recognizer:
+    """Build the production whole-page recognizer.
+
+    ``effort`` is for offline model A/Bs (``scripts/evaluate_recognition.py
+    --compare-model``); the live route leaves it unset.
+    """
 
     def recognize(data: bytes, _content_type: str) -> RecognitionResult:
         client = _build_client(api_key)
@@ -553,6 +566,7 @@ def make_recognizer(api_key: str, model: str) -> Recognizer:
             system=SYSTEM_PROMPT,
             schema=STF_OUTPUT_SCHEMA,
             user_text=_USER_TEXT,
+            effort=effort,
         )
         suggested_title = payload.pop("song_title", "")
         return RecognitionResult(
