@@ -1,7 +1,9 @@
-"""Unit tests for the Phase 3.5 tiling A/B comparison logic.
+"""Unit tests for the recognition A/B comparison logic.
 
-Only the pure `compare_reports` verdict is tested here — the replay path makes
-real API calls and is exercised manually against the environment's data volume.
+Two pure verdict functions are tested here: `compare_reports` (Phase 3.5 tiling
+A/B) and `compare_model_reports` (model A/B, `--compare-model`). The replay path
+makes real API calls and is exercised manually against the environment's data
+volume, for both.
 """
 
 from app.learning import baseline_report
