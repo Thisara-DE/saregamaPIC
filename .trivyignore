@@ -3,10 +3,10 @@
 # be removed and fixed for real. The gate still fails on any HIGH/CRITICAL not
 # listed here (ignore-unfixed:true, so only fixable vulns are ever reported).
 #
-# Both current entries are in the BASE IMAGE's system Python packaging tooling
+# All current entries are in the BASE IMAGE's system Python packaging tooling
 # (/usr/local/lib/python3.13/site-packages), NOT the application virtualenv the
 # server runs from (/app/backend/.venv, built by `uv sync --locked --no-dev`).
-# Neither package is an application dependency: both are absent from
+# None of these packages is an application dependency: all are absent from
 # backend/uv.lock and from `uv tree`, so they cannot be bumped via the lockfile.
 #
 # CVE-2025-47273 -- setuptools < 78.1.1: path traversal in PackageIndex.
@@ -25,3 +25,12 @@ CVE-2025-47273
 #   cannot be upgraded independently of pip, and the running server never
 #   executes pip. Unreachable at runtime.
 GHSA-6v7p-g79w-8964
+#
+# CVE-2026-97687 / CVE-2026-97689 -- urllib3 2.7.0 (both HIGH, fixed in 2.8.0):
+#   HTTPS-proxy TLS configuration override; unbounded memory in the chunk parser.
+#   Both are urllib3 CLIENT behaviours. This is pip's VENDORED copy (pip 26.2.1's
+#   vendor.txt pins 2.7.0; pip's main branch still does). The application's HTTP
+#   client is httpx, urllib3 is absent from uv.lock, and the running server never
+#   executes pip. No pip release carries the fix yet, so it cannot be upgraded.
+CVE-2026-97687
+CVE-2026-97689

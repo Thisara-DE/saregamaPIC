@@ -144,6 +144,14 @@ def test_production_recognizer_requests_structured_output_and_handles_truncation
         "header",
         "lines",
     ]
+    # The live route never pins effort — it keeps the model's own default.
+    assert "effort" not in captured["output_config"]
+
+    # Offline model A/Bs pin it on both arms, alongside the unchanged schema.
+    make_recognizer("test-key", "claude-opus-5-5", effort="high")(_jpeg(80, 60), "image/jpeg")
+    assert captured["model"] == "claude-opus-5-5"
+    assert captured["output_config"]["effort"] == "high"
+    assert captured["output_config"]["format"]["type"] == "json_schema"
 
     response.stop_reason = "max_tokens"
     response.content = [SimpleNamespace(type="text", text='{"song_title":')]

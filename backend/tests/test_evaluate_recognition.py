@@ -1,11 +1,13 @@
-"""Unit tests for the Phase 3.5 tiling A/B comparison logic.
+"""Unit tests for the recognition A/B comparison logic.
 
-Only the pure `compare_reports` verdict is tested here — the replay path makes
-real API calls and is exercised manually against the environment's data volume.
+Two pure verdict functions are tested here: `compare_reports` (Phase 3.5 tiling
+A/B) and `compare_model_reports` (model A/B, `--compare-model`). The replay path
+makes real API calls and is exercised manually against the environment's data
+volume, for both.
 """
 
 from app.learning import baseline_report
-from scripts.evaluate_recognition import compare_reports
+from scripts.evaluate_recognition import compare_model_reports, compare_reports
 
 
 def _result(categories: dict[str, int], *, corrected_tokens: int = 1000, token_acc: float = 0.7):
@@ -96,3 +98,52 @@ def test_tiled_inside_noise_band_does_not_clear_it():
     verdict = compare_reports(controls, tiled)
 
     assert verdict["guardrail"]["beyond_control_noise"] is False
+
+
+def test_model_ab_better_only_when_run_ranges_do_not_overlap():
+    controls = [
+        _report({"accidental": 100, "octave": 60, "letter": 50}, token_acc=0.70),  # 210
+        _report({"accidental": 90, "octave": 50, "letter": 40}, token_acc=0.72),  # 180
+    ]
+    candidates = [
+        _report({"accidental": 40, "octave": 30, "letter": 40}, token_acc=0.85),  # 110
+        _report({"accidental": 50, "octave": 30, "letter": 30}, token_acc=0.83),  # 110
+    ]
+
+    verdict = compare_model_reports(controls, candidates)
+
+    assert verdict["runs_per_arm"] == [2, 2]
+    total = verdict["metrics"]["total_corrections_per_1k"]
+    assert total["control_runs"] == [210.0, 180.0]
+    assert total["candidate_runs"] == [110.0, 110.0]
+    assert total["verdict"] == "better"
+    assert verdict["metrics"]["mean_token_accuracy"]["verdict"] == "better"
+    assert verdict["relative_reduction_total_corrections"] == round((195 - 110) / 195, 4)
+    accidental = next(c for c in verdict["per_category_per_1k"] if c["category"] == "accidental")
+    assert accidental["delta_per_1k"] == -50.0
+
+
+def test_model_ab_overlapping_runs_are_inside_noise():
+    controls = [_report({"accidental": 100}), _report({"accidental": 60})]
+    candidates = [_report({"accidental": 70}), _report({"accidental": 50})]  # 70 > min control 60
+
+    verdict = compare_model_reports(controls, candidates)
+
+    assert verdict["metrics"]["total_corrections_per_1k"]["verdict"] == "inside_noise"
+
+
+def test_model_ab_flags_a_worse_candidate():
+    controls = [
+        _report({"accidental": 50}, token_acc=0.8),
+        _report({"accidental": 60}, token_acc=0.79),
+    ]
+    candidates = [
+        _report({"accidental": 90}, token_acc=0.6),
+        _report({"accidental": 80}, token_acc=0.62),
+    ]
+
+    verdict = compare_model_reports(controls, candidates)
+
+    assert verdict["metrics"]["total_corrections_per_1k"]["verdict"] == "worse"
+    assert verdict["metrics"]["mean_token_accuracy"]["verdict"] == "worse"
+    assert verdict["relative_reduction_total_corrections"] < 0
