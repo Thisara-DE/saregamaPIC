@@ -63,7 +63,9 @@ def create_app(settings: Settings | None = None, recognizer: Recognizer | None =
     # Tests inject a fake recognizer; production builds the real Claude client
     # lazily (no SDK import / API key needed unless recognition is actually run).
     recognizer = recognizer or make_recognizer(
-        settings.anthropic_api_key, settings.recognition_model
+        settings.anthropic_api_key,
+        settings.recognition_model,
+        effort=settings.recognition_effort or None,
     )
 
     @asynccontextmanager

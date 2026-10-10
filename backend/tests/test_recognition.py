@@ -144,7 +144,7 @@ def test_production_recognizer_requests_structured_output_and_handles_truncation
         "header",
         "lines",
     ]
-    # The live route never pins effort — it keeps the model's own default.
+    # Given no effort, the request leaves it out and the model's own default applies.
     assert "effort" not in captured["output_config"]
 
     # Offline model A/Bs pin it on both arms, alongside the unchanged schema.
@@ -159,6 +159,47 @@ def test_production_recognizer_requests_structured_output_and_handles_truncation
         recognizer(_jpeg(80, 60), "image/jpeg")
     assert error.value.code == "max_tokens"
     assert "truncated" in str(error.value)
+
+
+def test_settings_recognition_effort_defaults_to_high_and_reads_env(monkeypatch):
+    # `high` is what the 2026-10-10 model A/B measured, and it is Opus 4.8's own
+    # default; Opus 5.5 would otherwise fall back to `medium`, which nobody measured.
+    monkeypatch.delenv("SAREGAMAPIC_EFFORT", raising=False)
+    assert Settings().recognition_effort == "high"
+    monkeypatch.setenv("SAREGAMAPIC_EFFORT", "medium")
+    assert Settings().recognition_effort == "medium"
+
+
+def test_create_app_pins_the_configured_effort_on_the_live_recognizer(tmp_path, monkeypatch):
+    calls = []
+
+    def spy(api_key, model, *, effort=None):
+        calls.append((model, effort))
+        return _fake_recognizer
+
+    monkeypatch.setattr("app.main.make_recognizer", spy)
+    create_app(
+        Settings(
+            data_dir=tmp_path / "data",
+            recognition_model="claude-opus-5-5",
+            recognition_effort="high",
+        )
+    )
+    # Empty = leave effort unset (for a model that rejects the parameter).
+    create_app(
+        Settings(
+            data_dir=tmp_path / "data",
+            recognition_model="claude-opus-4-8",
+            recognition_effort="",
+        )
+    )
+    assert calls == [("claude-opus-5-5", "high"), ("claude-opus-4-8", None)]
+
+
+def test_make_recognizer_rejects_an_unknown_effort():
+    # A typo in the env var must stop the app at startup, not 503 every recognition.
+    with pytest.raises(ValueError, match="effort"):
+        make_recognizer("test-key", "claude-opus-5-5", effort="hgih")
 
 
 def test_recognize_creates_draft_with_metrics(client):

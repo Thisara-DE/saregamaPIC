@@ -149,6 +149,12 @@ class Settings:
     recognition_model: str = field(
         default_factory=lambda: os.environ.get("SAREGAMAPIC_MODEL", "claude-opus-4-8")
     )
+    # Pinned on every recognition request. `high` is what the 2026-10-10 model A/B
+    # measured and is Opus 4.8's own default; Opus 5.5 would fall back to `medium`,
+    # which was never measured. Empty = send no effort (a model that rejects it).
+    recognition_effort: str = field(
+        default_factory=lambda: os.environ.get("SAREGAMAPIC_EFFORT", "high")
+    )
     # Production containers set this to the compiled React directory. Empty in
     # local Vite development and tests, where the frontend runs separately.
     web_dir: Path | None = field(default_factory=lambda: (
