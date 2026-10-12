@@ -10,7 +10,7 @@ import { API_CACHE, AUTH_CACHE, IMAGE_CACHE } from "./src/swCache";
 const DAY = 24 * 60 * 60;
 
 // LAN HTTPS (needed for PWA install + camera on real devices):
-// generate certs with mkcert into frontend/certs/ (see README) and the dev
+// generate certs with mkcert into frontend/certs/ and the dev
 // server picks them up automatically. Without certs it serves plain HTTP,
 // which is fine for desktop localhost work.
 // SAREGAMAPIC_NO_HTTPS=1 forces plain HTTP even when certs exist (used by
