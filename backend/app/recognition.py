@@ -66,6 +66,10 @@ _MAX_EDGE = 2600
 # keeps the connection active — Railway drops idle long-running responses, which is
 # exactly what the client-side recognition recovery exists to survive.
 _MAX_OUTPUT_TOKENS = 32000
+# The `output_config.effort` levels the API accepts. Checked when the recognizer is
+# built, so a typo in SAREGAMAPIC_EFFORT stops the app at startup instead of turning
+# every recognition into a 503.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 PREPROCESSING_VERSION = "grayscale-autocontrast-2600-v1"
 PROMPT_VERSION = "stf-v1.1-2026-07-24-msharp"
 
@@ -488,10 +492,10 @@ def _recognize_image(
     streaming keeps the connection active for the long run. Raises
     RecognitionUnavailable on a network error, truncation, refusal, or bad JSON.
 
-    ``effort`` is omitted from the request when None, so the production call keeps
-    the model's own default (``high`` on Opus 4.8). Model A/Bs pass it explicitly:
-    defaults differ between models (Opus 5.5 defaults to ``medium``), and an
-    unpinned effort would confound the comparison.
+    ``effort`` is omitted from the request when None, so the model's own default
+    applies (``high`` on Opus 4.8, ``medium`` on Opus 5.5). The live route pins it
+    from ``Settings.recognition_effort`` and model A/Bs pass it explicitly: defaults
+    differ between models, and an unpinned effort runs a configuration nobody measured.
     """
     import anthropic
 
@@ -551,9 +555,16 @@ def _recognize_image(
 def make_recognizer(api_key: str, model: str, *, effort: str | None = None) -> Recognizer:
     """Build the production whole-page recognizer.
 
-    ``effort`` is for offline model A/Bs (``scripts/evaluate_recognition.py
-    --compare-model``); the live route leaves it unset.
+    ``effort`` is pinned on every request when given: the live route passes
+    ``Settings.recognition_effort`` and the offline model A/B
+    (``scripts/evaluate_recognition.py --compare-model``) passes it on both arms.
+    None leaves the model's own default. An unknown level raises ValueError here, at
+    construction, so a bad setting fails at startup.
     """
+    if effort is not None and effort not in EFFORT_LEVELS:
+        raise ValueError(
+            f"unknown effort {effort!r}; expected one of {', '.join(EFFORT_LEVELS)}"
+        )
 
     def recognize(data: bytes, _content_type: str) -> RecognitionResult:
         client = _build_client(api_key)
